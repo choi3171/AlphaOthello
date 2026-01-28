@@ -400,6 +400,9 @@ class Quoridor:
         self.action_size = self.piece_action_size + 2 * self.walls_action_size
         self.initial_walls_left = 5
 
+    def __repr__(self):
+        return "Quoridor"
+
     def get_initial_state(self):
         BoardState = [np.zeros(shape=(self.size, self.size), dtype=int),
                       np.zeros(shape=(self.size - 1, self.size - 1), dtype=int),
