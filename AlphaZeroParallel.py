@@ -59,8 +59,7 @@ class MCTSParallel:
                         spg.search_depth_average += node.depth / spg.search_depth_num
 
                 value, is_terminal = self.game.get_value_and_terminated(node.state, node.action_taken)
-                if self.game.__repr__() != "Othello":
-                    value = self.game.get_opponent_value(value)
+                value = self.game.get_opponent_value(value)
                 
                 if is_terminal:
                     node.is_terminal = True
