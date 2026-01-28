@@ -32,6 +32,7 @@ game_dict = {
     "connectfour": ConnectFour(),
     "othello": Othello(),
     "gomokunaive": GomokuNaive()
+    "quoridor": Quoridor()
 }
 
 
