@@ -59,8 +59,7 @@ class MCTSParallel:
                         spg.search_depth_average += node.depth / spg.search_depth_num
 
                 value, is_terminal = self.game.get_value_and_terminated(node.state, node.action_taken)
-                if self.game.__repr__() != "Othello":
-                    value = self.game.get_opponent_value(value)
+                value = self.game.get_opponent_value(value)
                 
                 if is_terminal:
                     node.is_terminal = True
@@ -490,7 +489,10 @@ class AlphaZeroParallelRay:
             torch.save(self.model.state_dict(), f"./saved_model/model_{iteration}_{self.game}.pt")
             torch.save(self.optimizer.state_dict(), f"./saved_model/optimizer_{iteration}_{self.game}.pt")
             self.reset_history()
-
+            
+        for actor in actors:
+            ray.kill(actor)
+    
     def add_history(self, return_history):
         for key, value in return_history.items():
             if type(value) is int:
