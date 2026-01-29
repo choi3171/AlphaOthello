@@ -543,6 +543,38 @@ class Quoridor:
         p_idx = 0 if player == 1 else 1
         return (player == 1 and state['pos'][p_idx, 0] == self.size - 1) or \
                (player == -1 and state['pos'][p_idx, 0] == 0)
+
+    def change_perspective(self, state, player):
+            if player == 1:
+                return state
+
+            old_p1_path = state['path_cache'][0]
+            old_p2_path = state['path_cache'][1]
+            
+            new_p1_path = None
+            new_p2_path = None
+
+            if old_p2_path is not None:
+                new_p1_path = [(self.size - 1 - r, c) for r, c in old_p2_path]
+                
+            if old_p1_path is not None:
+                new_p2_path = [(self.size - 1 - r, c) for r, c in old_p1_path]
+                
+            new_state = {
+                'pos': np.array([
+                    [self.size - 1 - state['pos'][1][0], state['pos'][1][1]], 
+                    [self.size - 1 - state['pos'][0][0], state['pos'][0][1]]
+                ]),
+                
+                'walls_v': np.flipud(state['walls_v']),
+                'walls_h': np.flipud(state['walls_h']),
+                
+                'walls_left': np.array([state['walls_left'][1], state['walls_left'][0]]),
+                
+                'path_cache': [None, None]
+            }
+            
+            return new_state
     
     def get_value_and_terminated(self, state, action):
         if self.check_win(state, action):
