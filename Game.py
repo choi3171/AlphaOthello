@@ -559,7 +559,7 @@ class Quoridor:
                 
             if old_p1_path is not None:
                 new_p2_path = [(self.size - 1 - r, c) for r, c in old_p1_path]
-                
+
             new_state = {
                 'pos': np.array([
                     [self.size - 1 - state['pos'][1][0], state['pos'][1][1]], 
@@ -571,7 +571,7 @@ class Quoridor:
                 
                 'walls_left': np.array([state['walls_left'][1], state['walls_left'][0]]),
                 
-                'path_cache': [None, None]
+                'path_cache': [new_p1_path, new_p2_path]
             }
             
             return new_state
@@ -674,7 +674,8 @@ class Quoridor:
         print("    " + "-" * (self.size * 4 + 5))
         print(f"남은 벽 -> Player 1: {state['walls_left'][0]}개 | Player 2: {state['walls_left'][1]}개")
 
-#Bitboard 연산으로 속도 최대화(by. Gemini) → 이해하지 못함...
+# Bitboard
+
 class BitboardQuoridor:
     def __init__(self, size=7):
         self.size = size
@@ -864,33 +865,75 @@ class BitboardQuoridor:
             return 0, True
         return 0, False
 
-        def get_opponent_value(self, value):
+    def change_perspective(self, state, player):
+            if player == 1:
+                return state
+            
+            def flip_pos_bit(bit):
+                if bit == 0: return 0
+                idx = bit.bit_length() - 1
+                new_idx = (self.num_squares - 1) - idx
+                return 1 << new_idx
+
+            new_p1 = flip_pos_bit(state['p_bits'][1])
+            new_p2 = flip_pos_bit(state['p_bits'][0])
+
+            wall_grid_size = (self.size - 1) ** 2
+            
+            def flip_wall_bits(walls_int):
+                new_walls = 0
+                temp = walls_int
+                while temp:
+                    bit = temp & -temp
+                    idx = bit.bit_length() - 1
+                    new_idx = (wall_grid_size - 1) - idx
+                    new_walls |= (1 << new_idx)
+                    temp &= temp - 1
+                return new_walls
+
+            new_wh = flip_wall_bits(state['walls_h'])
+            new_wv = flip_wall_bits(state['walls_v'])
+
+            return {
+                'p_bits': [new_p1, new_p2],
+                'walls_h': new_wh,
+                'walls_v': new_wv,
+                'walls_left': np.array([state['walls_left'][1], state['walls_left'][0]])
+            }
+
+
+    def get_opponent_value(self, value):
         return -value
 
     def get_encoded_state(self, state):
-        """
-        Channel 구성:
-        0: Player 1 위치 (1이면 존재, 0이면 없음)
-        1: Player 2 위치
-        2: 가로 벽(Horizontal Walls) 위치 (1이면 존재)
-        3: 세로 벽(Vertical Walls) 위치
-        4: Player 1 남은 벽 비율 (0.0 ~ 1.0)
-        5: Player 2 남은 벽 비율 (0.0 ~ 1.0)
-        """
         encoded_state = np.zeros((6, self.size, self.size), dtype=np.float32)
         
-        # 1. [Channel 0, 1] 플레이어 위치 정보
-        p1_r, p1_c = state['pos'][0]
-        p2_r, p2_c = state['pos'][1]
+        p1_bit = state['p_bits'][0]
+        if p1_bit > 0:
+            idx = p1_bit.bit_length() - 1
+            r, c = divmod(idx, self.size)
+            encoded_state[0, r, c] = 1.0
+
+        p2_bit = state['p_bits'][1]
+        if p2_bit > 0:
+            idx = p2_bit.bit_length() - 1
+            r, c = divmod(idx, self.size)
+            encoded_state[1, r, c] = 1.0
+
+        wall_size = self.size - 1
         
-        encoded_state[0, p1_r, p1_c] = 1.0
-        encoded_state[1, p2_r, p2_c] = 1.0
-        
-        # 2. [Channel 2, 3] 벽 위치 정보, padding 존재
-        encoded_state[2, :self.size-1, :self.size-1] = state['walls_h']
-        encoded_state[3, :self.size-1, :self.size-1] = state['walls_v']
-        
-        # 3. [Channel 4, 5] 남은 벽 개수 (Scalar -> Plane Broadcasting)
+        wh = state['walls_h']
+        for i in range(self.walls_action_size):
+            if (wh >> i) & 1:
+                r, c = divmod(i, wall_size)
+                encoded_state[2, r, c] = 1.0
+
+        wv = state['walls_v']
+        for i in range(self.walls_action_size):
+            if (wv >> i) & 1:
+                r, c = divmod(i, wall_size)
+                encoded_state[3, r, c] = 1.0
+
         p1_wall_ratio = state['walls_left'][0] / self.initial_walls_left
         p2_wall_ratio = state['walls_left'][1] / self.initial_walls_left
         
