@@ -5,12 +5,14 @@ import torch.nn.functional as F
 torch.manual_seed(0)
 
 class ResNet(nn.Module):
-    def __init__(self, game, num_resBlocks, num_hidden, device):
+    def __init__(self, game, num_resBlocks, num_hidden, device, in_channels=6): # 6 is for Quoridor test
         super().__init__()
         
         self.device = device
+        self.in_channels = in_channels
+
         self.startBlock = nn.Sequential(
-            nn.Conv2d(3, num_hidden, kernel_size=3, padding=1),
+            nn.Conv2d(in_channels, num_hidden, kernel_size=3, padding=1),
             nn.BatchNorm2d(num_hidden),
             nn.ReLU()
         )
