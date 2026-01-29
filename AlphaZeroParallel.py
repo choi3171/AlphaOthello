@@ -360,58 +360,6 @@ class AlphaZeroParallelRay:
         self.history = dict(win=0, draw=0, lose=0, average_depth=[], max_depth=[])
         self.log_dir = log_dir
         self.writer = SummaryWriter(log_dir=log_dir)
-    
-    # @ray.remote(num_gpus=0.2)
-    # def selfPlay(self):
-    #     return_memory = []
-    #     return_history = dict(win=0, draw=0, lose=0)
-    #     player = 1
-    #     spGames = [SPG(self.game) for spg in range(self.args['num_parallel_games'])]
-        
-    #     while len(spGames) > 0:
-    #         states = np.stack([spg.state for spg in spGames])
-    #         neutral_states = self.game.change_perspective(states, player)
-            
-    #         self.mcts.search(neutral_states, spGames)
-            
-    #         for i in range(len(spGames))[::-1]:
-    #             spg = spGames[i]
-                
-    #             action_probs = np.zeros(self.game.action_size)
-    #             for child in spg.root.children:
-    #                 action_probs[child.action_taken] = child.visit_count
-    #             action_probs /= np.sum(action_probs)
-
-    #             spg.memory.append((spg.root.state, action_probs, player))
-
-    #             temperature_action_probs = action_probs ** (1 / self.args['temperature'])
-    #             temperature_action_probs /= np.sum(temperature_action_probs)
-    #             action = np.random.choice(self.game.action_size, p=temperature_action_probs) # Divide temperature_action_probs with its sum in case of an error
-
-    #             spg.state = self.game.get_next_state(spg.state, action, player)
-
-    #             value, is_terminal = self.game.get_value_and_terminated(self.game.change_perspective(spg.state, player), action)
-
-    #             if is_terminal:
-    #                 if self.monitor:
-    #                     if value * player == 1:
-    #                         return_history['win'] += 1
-    #                     elif value * player == -1:
-    #                         return_history['lose'] += 1
-    #                     else:
-    #                         return_history['draw'] += 1
-    #                 for hist_neutral_state, hist_action_probs, hist_player in spg.memory:
-    #                     hist_outcome = value if hist_player == player else self.game.get_opponent_value(value)
-    #                     return_memory.append((
-    #                         self.game.get_encoded_state(hist_neutral_state),
-    #                         hist_action_probs,
-    #                         hist_outcome
-    #                     ))
-    #                 del spGames[i]
-                    
-    #         player = self.game.get_opponent(player)
-            
-    #     return return_memory, return_history
                 
     def train(self, memory, num_iteration, num_epoch):
         random.shuffle(memory)
