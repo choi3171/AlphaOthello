@@ -408,6 +408,9 @@ class Quoridor:
             sum(1 << (0 * self.size + c) for c in range(self.size))                # P2 (Bottom -> Top)
         ]
 
+    def __repr__(self):
+        return "Quoridor"
+
     def _precompute_move_masks(self):
         masks = []
         for i in range(self.num_squares):
@@ -426,10 +429,9 @@ class Quoridor:
             for c in range(self.size - 1):
                 wall_bit = 1 << (r * (self.size - 1) + c)
                 for col_off in [0, 1]:
-                    u = r * self.size + c + col_off
-                    d = (r + 1) * self.size + c + col_off
-                    blocks[(u, d)] = blocks.get((u, d), 0) | wall_bit
-                    blocks[(d, u)] = blocks.get((d, u), 0) | wall_bit
+                    m = (r * self.size + c + col_off, (r + 1) * self.size + c + col_off)
+                    blocks[m] = blocks.get(m, 0) | wall_bit
+                    blocks[(m[1], m[0])] = blocks.get((m[1], m[0]), 0) | wall_bit
         return blocks
 
     def _precompute_v_wall_masks(self):
@@ -438,10 +440,9 @@ class Quoridor:
             for c in range(self.size - 1):
                 wall_bit = 1 << (r * (self.size - 1) + c)
                 for row_off in [0, 1]:
-                    l = (r + row_off) * self.size + c
-                    r_idx = (r + row_off) * self.size + c + 1
-                    blocks[(l, r_idx)] = blocks.get((l, r_idx), 0) | wall_bit
-                    blocks[(r_idx, l)] = blocks.get((r_idx, l), 0) | wall_bit
+                    m = ((r + row_off) * self.size + c, (r + row_off) * self.size + c + 1)
+                    blocks[m] = blocks.get(m, 0) | wall_bit
+                    blocks[(m[1], m[0])] = blocks.get((m[1], m[0]), 0) | wall_bit
         return blocks
 
     def get_initial_state(self):
@@ -449,7 +450,8 @@ class Quoridor:
             'p_bits': [1 << (self.size // 2), 1 << (self.num_squares - 1 - self.size // 2)],
             'walls_h': 0,
             'walls_v': 0,
-            'walls_left': np.array([self.initial_walls_left, self.initial_walls_left])
+            'walls_left': np.array([self.initial_walls_left, self.initial_walls_left]),
+            'turn': 0  # 0: Player 1, 1: Player 2
         }
 
     def is_blocked(self, state, f_idx, t_idx):
@@ -460,38 +462,54 @@ class Quoridor:
     def has_path(self, state, player_idx):
         reachable = state['p_bits'][player_idx]
         goal_mask = self.goal_masks[player_idx]
-        visited = reachable
-
+        
         while True:
+            next_reachable = reachable
             temp = reachable
-            reachable = 0
-            
             while temp:
                 curr_bit = temp & -temp
-                temp ^= curr_bit
                 curr_idx = curr_bit.bit_length() - 1
-                
                 for _, target_bit in self.move_masks[curr_idx].items():
-                    target_idx = target_bit.bit_length() - 1
-                    if not (visited & target_bit) and not self.is_blocked(state, curr_idx, target_idx):
-                        reachable |= target_bit
+                    if not self.is_blocked(state, curr_idx, target_bit.bit_length() - 1):
+                        next_reachable |= target_bit
+                temp &= temp - 1
             
-            if reachable & goal_mask: return True
-            if reachable == 0: return False
-            
-            visited |= reachable
-            temp = reachable
+            if next_reachable & goal_mask: return True
+            if next_reachable == reachable: return False
+            reachable = next_reachable
 
-    def get_valid_moves(self, state, player):
+    def get_next_state(self, state, action_idx, player):
         p_idx = 0 if player == 1 else 1
+        next_state = {
+            'p_bits': state['p_bits'].copy(),
+            'walls_h': state['walls_h'],
+            'walls_v': state['walls_v'],
+            'walls_left': state['walls_left'].copy(),
+            'turn': 1 - state['turn']
+        }
+        
+        if action_idx < self.piece_action_size:
+            next_state['p_bits'][p_idx] = 1 << action_idx
+        elif action_idx < self.piece_action_size + self.walls_action_size:
+            next_state['walls_h'] |= (1 << (action_idx - self.piece_action_size))
+            next_state['walls_left'][p_idx] -= 1
+        else:
+            next_state['walls_v'] |= (1 << (action_idx - self.piece_action_size - self.walls_action_size))
+            next_state['walls_left'][p_idx] -= 1
+        return next_state
+    
+    def get_valid_moves(self, state):
+        current_turn = int(state.get('turn', 0))
+        
+        p_idx = current_turn
         opp_idx = 1 - p_idx
+
         valid_moves = np.zeros(self.action_size, dtype=int)
         
         curr_bit = state['p_bits'][p_idx]
         curr_idx = curr_bit.bit_length() - 1
         opp_bit = state['p_bits'][opp_idx]
-        opp_idx_pos = opp_bit.bit_length() - 1
-        
+
         for direction, target_bit in self.move_masks[curr_idx].items():
             target_idx = target_bit.bit_length() - 1
             
@@ -543,196 +561,6 @@ class Quoridor:
                             state['walls_v'] &= ~wall_bit
 
         return valid_moves
-
-    def get_next_state(self, state, action_idx, player):
-        p_idx = 0 if player == 1 else 1
-        next_state = {
-            'p_bits': state['p_bits'][:],
-            'walls_h': state['walls_h'],
-            'walls_v': state['walls_v'],
-            'walls_left': state['walls_left'].copy()
-        }
-        
-        if action_idx < self.piece_action_size:
-            next_state['p_bits'][p_idx] = 1 << action_idx
-        elif action_idx < self.piece_action_size + self.walls_action_size:
-            idx = action_idx - self.piece_action_size
-            next_state['walls_h'] |= (1 << idx)
-            next_state['walls_left'][p_idx] -= 1
-        else:
-            idx = action_idx - self.piece_action_size - self.walls_action_size
-            next_state['walls_v'] |= (1 << idx)
-            next_state['walls_left'][p_idx] -= 1
-            
-        return next_state
-
-    def check_win(self, state, player):
-        p_idx = 0 if player == 1 else 1
-        return bool(state['p_bits'][p_idx] & self.goal_masks[p_idx])
-
-    def get_value_and_terminated(self, state, player):
-        if self.check_win(state, player):
-            return 1, True
-        if self.check_win(state, -player):
-            return -1, True
-        if np.sum(self.get_valid_moves(state, player)) == 0:
-            return 0, True
-            
-        return 0, False
-    def __init__(self, size=7):
-        self.size = size
-        self.num_squares = size * size
-        self.piece_action_size = self.num_squares
-        self.walls_action_size = (size - 1) ** 2
-        self.action_size = self.piece_action_size + 2 * self.walls_action_size
-        self.initial_walls_left = 5
-
-
-        self.move_masks = self._precompute_move_masks()
-        self.h_wall_masks = self._precompute_h_wall_masks()
-        self.v_wall_masks = self._precompute_v_wall_masks()
-        
-        self.goal_masks = [
-            sum(1 << ((self.size - 1) * self.size + c) for c in range(self.size)), # P1 (Top -> Bottom)
-            sum(1 << (0 * self.size + c) for c in range(self.size))                # P2 (Bottom -> Top)
-        ]
-
-    def _precompute_move_masks(self):
-        masks = []
-        for i in range(self.num_squares):
-            r, c = divmod(i, self.size)
-            m = {}
-            if r > 0: m['U'] = 1 << (i - self.size)
-            if r < self.size - 1: m['D'] = 1 << (i + self.size)
-            if c > 0: m['L'] = 1 << (i - 1)
-            if c < self.size - 1: m['R'] = 1 << (i + 1)
-            masks.append(m)
-        return masks
-
-    def _precompute_h_wall_masks(self):
-        blocks = {}
-        for r in range(self.size - 1):
-            for c in range(self.size - 1):
-                wall_bit = 1 << (r * (self.size - 1) + c)
-                for col_off in [0, 1]:
-                    m = (r * self.size + c + col_off, (r + 1) * self.size + c + col_off)
-                    blocks[m] = blocks.get(m, 0) | wall_bit
-                    blocks[(m[1], m[0])] = blocks.get((m[1], m[0]), 0) | wall_bit
-        return blocks
-
-    def _precompute_v_wall_masks(self):
-        blocks = {}
-        for r in range(self.size - 1):
-            for c in range(self.size - 1):
-                wall_bit = 1 << (r * (self.size - 1) + c)
-                for row_off in [0, 1]:
-                    m = ((r + row_off) * self.size + c, (r + row_off) * self.size + c + 1)
-                    blocks[m] = blocks.get(m, 0) | wall_bit
-                    blocks[(m[1], m[0])] = blocks.get((m[1], m[0]), 0) | wall_bit
-        return blocks
-
-    def get_initial_state(self):
-        return {
-            'p_bits': [1 << (self.size // 2), 1 << (self.num_squares - 1 - self.size // 2)],
-            'walls_h': 0,
-            'walls_v': 0,
-            'walls_left': np.array([self.initial_walls_left, self.initial_walls_left])
-        }
-
-    def is_blocked(self, state, f_idx, t_idx):
-        if self.h_wall_masks.get((f_idx, t_idx), 0) & state['walls_h']: return True
-        if self.v_wall_masks.get((f_idx, t_idx), 0) & state['walls_v']: return True
-        return False
-
-    def has_path(self, state, player_idx):
-        reachable = state['p_bits'][player_idx]
-        goal_mask = self.goal_masks[player_idx]
-        
-        while True:
-            next_reachable = reachable
-            temp = reachable
-            while temp:
-                curr_bit = temp & -temp
-                curr_idx = curr_bit.bit_length() - 1
-                for _, target_bit in self.move_masks[curr_idx].items():
-                    if not self.is_blocked(state, curr_idx, target_bit.bit_length() - 1):
-                        next_reachable |= target_bit
-                temp &= temp - 1
-            
-            if next_reachable & goal_mask: return True
-            if next_reachable == reachable: return False
-            reachable = next_reachable
-
-    def get_next_state(self, state, action_idx, player):
-        p_idx = 0 if player == 1 else 1
-        next_state = {
-            'p_bits': state['p_bits'].copy(),
-            'walls_h': state['walls_h'],
-            'walls_v': state['walls_v'],
-            'walls_left': state['walls_left'].copy()
-        }
-        
-        if action_idx < self.piece_action_size:
-            next_state['p_bits'][p_idx] = 1 << action_idx
-        elif action_idx < self.piece_action_size + self.walls_action_size:
-            next_state['walls_h'] |= (1 << (action_idx - self.piece_action_size))
-            next_state['walls_left'][p_idx] -= 1
-        else:
-            next_state['walls_v'] |= (1 << (action_idx - self.piece_action_size - self.walls_action_size))
-            next_state['walls_left'][p_idx] -= 1
-        return next_state
-    
-    def get_valid_moves(self, state, player):
-        p_idx = 0 if player == 1 else 1
-        opp_idx = 1 - p_idx
-        valid_moves = np.zeros(self.action_size, dtype=int)
-        
-        curr_bit = state['p_bits'][p_idx]
-        curr_idx = curr_bit.bit_length() - 1
-        opp_bit = state['p_bits'][opp_idx]
-        
-        for direction, target_bit in self.move_masks[curr_idx].items():
-            target_idx = target_bit.bit_length() - 1
-            
-            if not self.is_blocked(state, curr_idx, target_idx):
-                if target_bit != opp_bit:
-                    valid_moves[target_idx] = 1
-                else:
-                    jump_masks = self.move_masks[target_idx]
-                    if direction in jump_masks:
-                        j_bit = jump_masks[direction]
-                        j_idx = j_bit.bit_length() - 1
-                        if not self.is_blocked(state, target_idx, j_idx):
-                            valid_moves[j_idx] = 1
-
-        if state['walls_left'][p_idx] > 0:
-            for r in range(self.size - 1):
-                for c in range(self.size - 1):
-                    wall_bit = 1 << (r * (self.size - 1) + c)
-                    
-                    if not (state['walls_h'] & wall_bit) and not (state['walls_v'] & wall_bit):
-                        overlap = False
-                        if c > 0 and (state['walls_h'] & (wall_bit >> 1)): overlap = True
-                        if c < self.size - 2 and (state['walls_h'] & (wall_bit << 1)): overlap = True
-                        
-                        if not overlap:
-                            state['walls_h'] |= wall_bit
-                            if self.has_path(state, 0) and self.has_path(state, 1):
-                                valid_moves[self.piece_action_size + r * (self.size-1) + c] = 1
-                            state['walls_h'] &= ~wall_bit
-
-                    if not (state['walls_v'] & wall_bit) and not (state['walls_h'] & wall_bit):
-                        overlap = False
-                        if r > 0 and (state['walls_v'] & (wall_bit >> (self.size - 1))): overlap = True
-                        if r < self.size - 2 and (state['walls_v'] & (wall_bit << (self.size - 1))): overlap = True
-                        
-                        if not overlap:
-                            state['walls_v'] |= wall_bit
-                            if self.has_path(state, 0) and self.has_path(state, 1):
-                                valid_moves[self.piece_action_size + self.walls_action_size + r * (self.size-1) + c] = 1
-                            state['walls_v'] &= ~wall_bit
-                            
-        return valid_moves
     
     def check_win(self, state, player):
         p_idx = 0 if player == 1 else 1
@@ -747,40 +575,43 @@ class Quoridor:
         return 0, False
 
     def change_perspective(self, state, player):
-            if player == 1:
-                return state
+        if isinstance(state, (list, np.ndarray)):
+            return np.array([self.change_perspective(s, player) for s in state])
+        if player == 1:
+            return state
             
-            def flip_pos_bit(bit):
-                if bit == 0: return 0
+        def flip_pos_bit(bit):
+            if bit == 0: return 0
+            idx = bit.bit_length() - 1
+            new_idx = (self.num_squares - 1) - idx
+            return 1 << new_idx
+
+        new_p1 = flip_pos_bit(state['p_bits'][1])
+        new_p2 = flip_pos_bit(state['p_bits'][0])
+
+        wall_grid_size = (self.size - 1) ** 2
+
+        def flip_wall_bits(walls_int):
+            new_walls = 0
+            temp = walls_int
+            while temp:
+                bit = temp & -temp
                 idx = bit.bit_length() - 1
-                new_idx = (self.num_squares - 1) - idx
-                return 1 << new_idx
+                new_idx = (wall_grid_size - 1) - idx
+                new_walls |= (1 << new_idx)
+                temp &= temp - 1
+            return new_walls
 
-            new_p1 = flip_pos_bit(state['p_bits'][1])
-            new_p2 = flip_pos_bit(state['p_bits'][0])
+        new_wh = flip_wall_bits(state['walls_h'])
+        new_wv = flip_wall_bits(state['walls_v'])
 
-            wall_grid_size = (self.size - 1) ** 2
-            
-            def flip_wall_bits(walls_int):
-                new_walls = 0
-                temp = walls_int
-                while temp:
-                    bit = temp & -temp
-                    idx = bit.bit_length() - 1
-                    new_idx = (wall_grid_size - 1) - idx
-                    new_walls |= (1 << new_idx)
-                    temp &= temp - 1
-                return new_walls
-
-            new_wh = flip_wall_bits(state['walls_h'])
-            new_wv = flip_wall_bits(state['walls_v'])
-
-            return {
-                'p_bits': [new_p1, new_p2],
-                'walls_h': new_wh,
-                'walls_v': new_wv,
-                'walls_left': np.array([state['walls_left'][1], state['walls_left'][0]])
-            }
+        return {
+            'p_bits': [new_p1, new_p2],
+            'walls_h': new_wh,
+            'walls_v': new_wv,
+            'walls_left': np.array([state['walls_left'][1], state['walls_left'][0]]),
+            'turn': 0
+        }
 
 
     def get_opponent_value(self, value):
@@ -790,38 +621,51 @@ class Quoridor:
         return -player
 
     def get_encoded_state(self, state):
-        encoded_state = np.zeros((6, self.size, self.size), dtype=np.float32)
+        if isinstance(state, (list, np.ndarray)):
+            return np.array([self.get_encoded_state(s) for s in state])
         
-        p1_bit = state['p_bits'][0]
-        if p1_bit > 0:
-            idx = p1_bit.bit_length() - 1
+        if 'turn' not in state:
+            raise KeyError("State 딕셔너리에 'turn' 정보가 없습니다.")
+
+        current_turn = int(state['turn'])
+        
+        is_player_2 = (current_turn == 1)
+        my_idx = current_turn
+        opp_idx = 1 - current_turn
+
+        encoded_state = np.zeros((6, self.size, self.size), dtype=np.float32)
+
+        my_bit = state['p_bits'][my_idx]
+        if my_bit > 0:
+            idx = int(my_bit.bit_length() - 1)
             r, c = divmod(idx, self.size)
+            if is_player_2: r, c = self.size - 1 - r, self.size - 1 - c
             encoded_state[0, r, c] = 1.0
 
-        p2_bit = state['p_bits'][1]
-        if p2_bit > 0:
-            idx = p2_bit.bit_length() - 1
+        opp_bit = state['p_bits'][opp_idx]
+        if opp_bit > 0:
+            idx = int(opp_bit.bit_length() - 1)
             r, c = divmod(idx, self.size)
+            if is_player_2: r, c = self.size - 1 - r, self.size - 1 - c
             encoded_state[1, r, c] = 1.0
 
         wall_size = self.size - 1
-        
+
         wh = state['walls_h']
         for i in range(self.walls_action_size):
             if (wh >> i) & 1:
                 r, c = divmod(i, wall_size)
+                if is_player_2: r, c = wall_size - 1 - r, wall_size - 1 - c
                 encoded_state[2, r, c] = 1.0
 
         wv = state['walls_v']
         for i in range(self.walls_action_size):
             if (wv >> i) & 1:
                 r, c = divmod(i, wall_size)
+                if is_player_2: r, c = wall_size - 1 - r, wall_size - 1 - c
                 encoded_state[3, r, c] = 1.0
 
-        p1_wall_ratio = state['walls_left'][0] / self.initial_walls_left
-        p2_wall_ratio = state['walls_left'][1] / self.initial_walls_left
-        
-        encoded_state[4].fill(p1_wall_ratio)
-        encoded_state[5].fill(p2_wall_ratio)
+        encoded_state[4, :, :] = state['walls_left'][my_idx] / self.initial_walls_left
+        encoded_state[5, :, :] = state['walls_left'][opp_idx] / self.initial_walls_left
         
         return encoded_state
