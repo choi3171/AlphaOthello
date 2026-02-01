@@ -391,292 +391,6 @@ class GomokuNaive:
         return visualized_state
 
 class Quoridor:
-    def __init__(self):
-        self.size = 7
-        self.piece_action_size = self.size**2
-        self.walls_action_size = (self.size - 1)**2
-        self.action_size = self.piece_action_size + 2 * self.walls_action_size
-        self.initial_walls_left = 5
-
-    def get_initial_state(self):
-        return {
-            'pos': np.array([[0, self.size//2], [self.size-1, self.size//2]]),
-            'walls_v': np.zeros((self.size-1, self.size-1), dtype=np.int8),
-            'walls_h': np.zeros((self.size-1, self.size-1), dtype=np.int8),
-            'walls_left': np.array([self.initial_walls_left, self.initial_walls_left]),
-            'path_cache': [None, None]
-        }
-    
-    def get_next_state(self, state, action_idx, player):
-        # 배열 단위 copy로 독립성 보장 (MCTS 안전)
-        next_state = {
-            'pos': state['pos'].copy(),
-            'walls_v': state['walls_v'].copy(),
-            'walls_h': state['walls_h'].copy(),
-            'walls_left': state['walls_left'].copy(),
-            'path_cache': [None, None]
-        }
-        p_idx = 0 if player == 1 else 1
-
-        if action_idx < self.piece_action_size:
-            row, col = divmod(action_idx, self.size)
-            next_state['pos'][p_idx] = [row, col]
-        elif action_idx < self.piece_action_size + self.walls_action_size:
-            idx = action_idx - self.piece_action_size
-            row, col = divmod(idx, self.size - 1)
-            next_state['walls_h'][row, col] = 1
-            next_state['walls_left'][p_idx] -= 1
-        else:
-            idx = action_idx - self.piece_action_size - self.walls_action_size
-            row, col = divmod(idx, self.size - 1)
-            next_state['walls_v'][row, col] = 1
-            next_state['walls_left'][p_idx] -= 1
-        return next_state
-
-    def get_valid_moves(self, state, player):
-        valid_moves = np.zeros(self.action_size, dtype=int)
-        p_idx = 0 if player == 1 else 1
-        r, c = state['pos'][p_idx]
-
-        # 1. 이동(Move) - O(1) 위치 참조
-        for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-            nr, nc = r + dr, c + dc
-            if 0 <= nr < self.size and 0 <= nc < self.size:
-                if not self.is_blocked_by_wall(state, r, c, nr, nc):
-                    # 상대방 위치 확인
-                    opp_pos = state['pos'][1 - p_idx]
-                    if not (nr == opp_pos[0] and nc == opp_pos[1]):
-                        valid_moves[nr * self.size + nc] = 1
-                    else: # 점프 로직
-                        jnr, jnc = nr + dr, nc + dc
-                        if 0 <= jnr < self.size and 0 <= jnc < self.size and not self.is_blocked_by_wall(state, nr, nc, jnr, jnc):
-                            valid_moves[jnr * self.size + jnc] = 1
-
-        # 2. 벽(Wall) - O(N) 경로 캐싱 기반 최적화
-        if state['walls_left'][p_idx] > 0:
-            path1 = self.get_any_path(state, 1)
-            path2 = self.get_any_path(state, -1)
-
-            for row in range(self.size - 1):
-                for col in range(self.size - 1):
-                    if state['walls_h'][row, col] == 0 and state['walls_v'][row, col] == 0:
-                        # 가로 벽
-                        if (col == 0 or state['walls_h'][row, col-1] == 0) and (col == self.size-2 or state['walls_h'][row, col+1] == 0):
-                            if self.is_path_safe(state, row, col, 'H', path1, path2):
-                                valid_moves[self.piece_action_size + row * (self.size-1) + col] = 1
-                        # 세로 벽
-                        if (row == 0 or state['walls_v'][row-1, col] == 0) and (row == self.size-2 or state['walls_v'][row+1, col] == 0):
-                            if self.is_path_safe(state, row, col, 'V', path1, path2):
-                                valid_moves[self.piece_action_size + self.walls_action_size + row * (self.size-1) + col] = 1
-        return valid_moves
-
-    def is_path_safe(self, state, r, c, orientation, path1, path2):
-        # 1. 신규 벽이 막는 에지 정의
-        if orientation == 'H':
-            blocked = {((r, c), (r+1, c)), ((r, c+1), (r+1, c+1))}
-            target_layer = 'walls_h'
-        else:
-            blocked = {((r, c), (r, c+1)), ((r+1, c), (r+1, c+1))}
-            target_layer = 'walls_v'
-
-        # 2. 캐시된 경로를 건드리는지 확인
-        needs_check1 = any((u, v) in blocked or (v, u) in blocked for u, v in zip(path1, path1[1:]))
-        needs_check2 = any((u, v) in blocked or (v, u) in blocked for u, v in zip(path2, path2[1:]))
-
-        if not needs_check1 and not needs_check2: return True
-
-        # 3. In-place 체크 (복사 방지 최적화)
-        state[target_layer][r, c] = 1
-        res = True
-        if needs_check1 and not self.has_path_exists(state, 1): res = False
-        if res and needs_check2 and not self.has_path_exists(state, -1): res = False
-        state[target_layer][r, c] = 0 # 원복
-        return res
-
-    def has_path_exists(self, state, player):
-        """A* 기반 빠른 경로 존재 확인"""
-        p_idx = 0 if player == 1 else 1
-        start = tuple(state['pos'][p_idx])
-        goal_row = (self.size - 1) if player == 1 else 0
-        
-        pq = [(abs(start[0] - goal_row), 0, start)]
-        visited = {start}
-        while pq:
-            f, g, (r, c) = heapq.heappop(pq)
-            if r == goal_row: return True
-            for dr, dc in [(-1,0), (1,0), (0,-1), (0,1)]:
-                nr, nc = r + dr, c + dc
-                if 0 <= nr < self.size and 0 <= nc < self.size and (nr, nc) not in visited:
-                    if not self.is_blocked_by_wall(state, r, c, nr, nc):
-                        visited.add((nr, nc))
-                        heapq.heappush(pq, (g + 1 + abs(nr - goal_row), g + 1, (nr, nc)))
-        return False
-
-    def get_any_path(self, state, player):
-        """A* 기반 최단 경로 반환"""
-        p_idx = 0 if player == 1 else 1
-        start = tuple(state['pos'][p_idx])
-        goal_row = (self.size - 1) if player == 1 else 0
-        pq = [(abs(start[0] - goal_row), 0, start, [start])]
-        visited = {start: 0}
-        while pq:
-            f, g, (r, c), path = heapq.heappop(pq)
-            if r == goal_row: return path
-            for dr, dc in [(-1,0), (1,0), (0,-1), (0,1)]:
-                nr, nc = r + dr, c + dc
-                if 0 <= nr < self.size and 0 <= nc < self.size:
-                    if (nr, nc) not in visited or visited[(nr, nc)] > g + 1:
-                        if not self.is_blocked_by_wall(state, r, c, nr, nc):
-                            visited[(nr, nc)] = g + 1
-                            heapq.heappush(pq, (g + 1 + abs(nr - goal_row), g + 1, (nr, nc), path + [(nr, nc)]))
-        return [start]
-
-    def is_blocked_by_wall(self, state, r, c, nr, nc):
-        if r == nr: # 가로 이동
-            tc = c if nc > c else nc
-            return (r < self.size-1 and state['walls_v'][r, tc]) or (r > 0 and state['walls_v'][r-1, tc])
-        else: # 세로 이동
-            tr = r if nr > r else nr
-            return (c < self.size-1 and state['walls_h'][tr, c]) or (c > 0 and state['walls_h'][tr, c-1])
-
-    def check_win(self, state, player):
-        p_idx = 0 if player == 1 else 1
-        return (player == 1 and state['pos'][p_idx, 0] == self.size - 1) or \
-               (player == -1 and state['pos'][p_idx, 0] == 0)
-
-    def change_perspective(self, state, player):
-            if player == 1:
-                return state
-
-            old_p1_path = state['path_cache'][0]
-            old_p2_path = state['path_cache'][1]
-            
-            new_p1_path = None
-            new_p2_path = None
-
-            if old_p2_path is not None:
-                new_p1_path = [(self.size - 1 - r, c) for r, c in old_p2_path]
-                
-            if old_p1_path is not None:
-                new_p2_path = [(self.size - 1 - r, c) for r, c in old_p1_path]
-
-            new_state = {
-                'pos': np.array([
-                    [self.size - 1 - state['pos'][1][0], state['pos'][1][1]], 
-                    [self.size - 1 - state['pos'][0][0], state['pos'][0][1]]
-                ]),
-                
-                'walls_v': np.flipud(state['walls_v']),
-                'walls_h': np.flipud(state['walls_h']),
-                
-                'walls_left': np.array([state['walls_left'][1], state['walls_left'][0]]),
-                
-                'path_cache': [new_p1_path, new_p2_path]
-            }
-            
-            return new_state
-    
-    def get_value_and_terminated(self, state, action):
-        if self.check_win(state, action):
-            return 1, True
-        if np.sum(self.get_valid_moves(state)) == 0:
-            return 0, True
-        return 0, False
-    
-    def get_opponent_value(self, value):
-        return -value
-
-    def get_encoded_state(self, state):
-        """
-        Channel 구성:
-        0: Player 1 위치 (1이면 존재, 0이면 없음)
-        1: Player 2 위치
-        2: 가로 벽(Horizontal Walls) 위치 (1이면 존재)
-        3: 세로 벽(Vertical Walls) 위치
-        4: Player 1 남은 벽 비율 (0.0 ~ 1.0)
-        5: Player 2 남은 벽 비율 (0.0 ~ 1.0)
-        """
-        encoded_state = np.zeros((6, self.size, self.size), dtype=np.float32)
-        
-        # 1. [Channel 0, 1] 플레이어 위치 정보
-        p1_r, p1_c = state['pos'][0]
-        p2_r, p2_c = state['pos'][1]
-        
-        encoded_state[0, p1_r, p1_c] = 1.0
-        encoded_state[1, p2_r, p2_c] = 1.0
-        
-        # 2. [Channel 2, 3] 벽 위치 정보, padding 존재
-        encoded_state[2, :self.size-1, :self.size-1] = state['walls_h']
-        encoded_state[3, :self.size-1, :self.size-1] = state['walls_v']
-        
-        # 3. [Channel 4, 5] 남은 벽 개수 (Scalar -> Plane Broadcasting)
-        p1_wall_ratio = state['walls_left'][0] / self.initial_walls_left
-        p2_wall_ratio = state['walls_left'][1] / self.initial_walls_left
-        
-        encoded_state[4].fill(p1_wall_ratio)
-        encoded_state[5].fill(p2_wall_ratio)
-        
-        return encoded_state
-
-    def render(self, state):
-        # 상단 열 번호 표시
-        header = "       " + "    ".join([str(i) for i in range(self.size)])
-        print("\n" + header)
-        print("    " + "-" * (self.size * 4 + 5))
-        
-        # 플레이어 위치 추출 (딕셔너리 참조)
-        p1_pos = state['pos'][0]
-        p2_pos = state['pos'][1]
-        
-        for r in range(self.size):
-            # 1. 말(Piece)과 세로 벽(Vertical Wall) 행 출력
-            row_str = f" {r} | "
-            for c in range(self.size):
-                # 말 표시
-                if np.array_equal([r, c], p1_pos):
-                    char = "P1"
-                elif np.array_equal([r, c], p2_pos):
-                    char = "P2"
-                else:
-                    char = " ."
-                row_str += char
-                
-                # 세로 벽 표시 (walls_v 참조)
-                if c < self.size - 1:
-                    # 세로 벽은 (r, c) 또는 (r-1, c) 위치의 wall_v 값이 1일 때 존재
-                    is_v_wall = (r < self.size - 1 and state['walls_v'][r, c] == 1) or \
-                                (r > 0 and state['walls_v'][r-1, c] == 1)
-                    row_str += " | " if is_v_wall else "   "
-            row_str += " |"
-            print(row_str)
-            
-            # 2. 가로 벽(Horizontal Wall) 및 교차점 행 출력
-            if r < self.size - 1:
-                wall_line = "   | "
-                for c in range(self.size):
-                    # 가로 벽 체크 (walls_h 참조)
-                    is_h_wall = (c < self.size - 1 and state['walls_h'][r, c] == 1) or \
-                                (c > 0 and state['walls_h'][r, c-1] == 1)
-                    if is_h_wall:
-                        wall_line += "=== "
-                    else:
-                        wall_line += "   "
-
-                    # 벽을 놓을 수 있는 교차점(Index) 표시
-                    if c < self.size - 1:
-                        # 이미 벽이 있는 곳은 공백, 없는 곳은 인덱스 표시
-                        if state['walls_h'][r, c] == 0 and state['walls_v'][r, c] == 0:
-                            wall_line += f"{r}{c}"
-                        else:
-                            wall_line += " "
-                print(wall_line)
-        
-        print("    " + "-" * (self.size * 4 + 5))
-        print(f"남은 벽 -> Player 1: {state['walls_left'][0]}개 | Player 2: {state['walls_left'][1]}개")
-
-# Bitboard
-
-class BitboardQuoridor:
     def __init__(self, size=7):
         self.size = size
         self.num_squares = size * size
@@ -685,12 +399,10 @@ class BitboardQuoridor:
         self.action_size = self.piece_action_size + 2 * self.walls_action_size
         self.initial_walls_left = 5
 
-        # 1. 이동 마스크 및 벽 충돌 마스크 사전 계산 (Pre-computation)
         self.move_masks = self._precompute_move_masks()
         self.h_wall_masks = self._precompute_h_wall_masks()
         self.v_wall_masks = self._precompute_v_wall_masks()
         
-        # 2. 플레이어별 목표 행 비트마스크
         self.goal_masks = [
             sum(1 << ((self.size - 1) * self.size + c) for c in range(self.size)), # P1 (Top -> Bottom)
             sum(1 << (0 * self.size + c) for c in range(self.size))                # P2 (Bottom -> Top)
@@ -709,7 +421,195 @@ class BitboardQuoridor:
         return masks
 
     def _precompute_h_wall_masks(self):
-        # 특정 (from, to) 이동을 막는 가로벽 비트들을 매핑
+        blocks = {}
+        for r in range(self.size - 1):
+            for c in range(self.size - 1):
+                wall_bit = 1 << (r * (self.size - 1) + c)
+                for col_off in [0, 1]:
+                    u = r * self.size + c + col_off
+                    d = (r + 1) * self.size + c + col_off
+                    blocks[(u, d)] = blocks.get((u, d), 0) | wall_bit
+                    blocks[(d, u)] = blocks.get((d, u), 0) | wall_bit
+        return blocks
+
+    def _precompute_v_wall_masks(self):
+        blocks = {}
+        for r in range(self.size - 1):
+            for c in range(self.size - 1):
+                wall_bit = 1 << (r * (self.size - 1) + c)
+                for row_off in [0, 1]:
+                    l = (r + row_off) * self.size + c
+                    r_idx = (r + row_off) * self.size + c + 1
+                    blocks[(l, r_idx)] = blocks.get((l, r_idx), 0) | wall_bit
+                    blocks[(r_idx, l)] = blocks.get((r_idx, l), 0) | wall_bit
+        return blocks
+
+    def get_initial_state(self):
+        return {
+            'p_bits': [1 << (self.size // 2), 1 << (self.num_squares - 1 - self.size // 2)],
+            'walls_h': 0,
+            'walls_v': 0,
+            'walls_left': np.array([self.initial_walls_left, self.initial_walls_left])
+        }
+
+    def is_blocked(self, state, f_idx, t_idx):
+        if self.h_wall_masks.get((f_idx, t_idx), 0) & state['walls_h']: return True
+        if self.v_wall_masks.get((f_idx, t_idx), 0) & state['walls_v']: return True
+        return False
+
+    def has_path(self, state, player_idx):
+        reachable = state['p_bits'][player_idx]
+        goal_mask = self.goal_masks[player_idx]
+        visited = reachable
+
+        while True:
+            temp = reachable
+            reachable = 0
+            
+            while temp:
+                curr_bit = temp & -temp
+                temp ^= curr_bit
+                curr_idx = curr_bit.bit_length() - 1
+                
+                for _, target_bit in self.move_masks[curr_idx].items():
+                    target_idx = target_bit.bit_length() - 1
+                    if not (visited & target_bit) and not self.is_blocked(state, curr_idx, target_idx):
+                        reachable |= target_bit
+            
+            if reachable & goal_mask: return True
+            if reachable == 0: return False
+            
+            visited |= reachable
+            temp = reachable
+
+    def get_valid_moves(self, state, player):
+        p_idx = 0 if player == 1 else 1
+        opp_idx = 1 - p_idx
+        valid_moves = np.zeros(self.action_size, dtype=int)
+        
+        curr_bit = state['p_bits'][p_idx]
+        curr_idx = curr_bit.bit_length() - 1
+        opp_bit = state['p_bits'][opp_idx]
+        opp_idx_pos = opp_bit.bit_length() - 1
+        
+        for direction, target_bit in self.move_masks[curr_idx].items():
+            target_idx = target_bit.bit_length() - 1
+            
+            if not self.is_blocked(state, curr_idx, target_idx):
+                if target_bit != opp_bit:
+                    valid_moves[target_idx] = 1
+                else:
+                    can_straight_jump = False
+                    if direction in self.move_masks[target_idx]:
+                        jump_bit = self.move_masks[target_idx][direction]
+                        jump_idx = jump_bit.bit_length() - 1
+                        if not self.is_blocked(state, target_idx, jump_idx):
+                            valid_moves[jump_idx] = 1
+                            can_straight_jump = True
+                    
+                    if not can_straight_jump:
+                        for diag_dir, diag_bit in self.move_masks[target_idx].items():
+                            if diag_dir != direction:
+                                diag_idx = diag_bit.bit_length() - 1
+                                if not self.is_blocked(state, target_idx, diag_idx):
+                                     valid_moves[diag_idx] = 1
+
+        if state['walls_left'][p_idx] > 0:
+            for r in range(self.size - 1):
+                for c in range(self.size - 1):
+                    wall_bit = 1 << (r * (self.size - 1) + c)
+                    
+                    if not (state['walls_h'] & wall_bit) and not (state['walls_v'] & wall_bit):
+                        is_overlap = False
+                        if c > 0 and (state['walls_h'] & (wall_bit >> 1)): is_overlap = True
+                        if c < self.size - 2 and (state['walls_h'] & (wall_bit << 1)): is_overlap = True
+                        
+                        if not is_overlap:
+                            state['walls_h'] |= wall_bit
+                            if self.has_path(state, 0) and self.has_path(state, 1):
+                                valid_moves[self.piece_action_size + r * (self.size-1) + c] = 1
+                            state['walls_h'] &= ~wall_bit
+
+                    if not (state['walls_v'] & wall_bit) and not (state['walls_h'] & wall_bit):
+                        is_overlap = False
+                        shift = self.size - 1
+                        if r > 0 and (state['walls_v'] & (wall_bit >> shift)): is_overlap = True
+                        if r < self.size - 2 and (state['walls_v'] & (wall_bit << shift)): is_overlap = True
+                        
+                        if not is_overlap:
+                            state['walls_v'] |= wall_bit
+                            if self.has_path(state, 0) and self.has_path(state, 1):
+                                valid_moves[self.piece_action_size + self.walls_action_size + r * (self.size-1) + c] = 1
+                            state['walls_v'] &= ~wall_bit
+
+        return valid_moves
+
+    def get_next_state(self, state, action_idx, player):
+        p_idx = 0 if player == 1 else 1
+        next_state = {
+            'p_bits': state['p_bits'][:],
+            'walls_h': state['walls_h'],
+            'walls_v': state['walls_v'],
+            'walls_left': state['walls_left'].copy()
+        }
+        
+        if action_idx < self.piece_action_size:
+            next_state['p_bits'][p_idx] = 1 << action_idx
+        elif action_idx < self.piece_action_size + self.walls_action_size:
+            idx = action_idx - self.piece_action_size
+            next_state['walls_h'] |= (1 << idx)
+            next_state['walls_left'][p_idx] -= 1
+        else:
+            idx = action_idx - self.piece_action_size - self.walls_action_size
+            next_state['walls_v'] |= (1 << idx)
+            next_state['walls_left'][p_idx] -= 1
+            
+        return next_state
+
+    def check_win(self, state, player):
+        p_idx = 0 if player == 1 else 1
+        return bool(state['p_bits'][p_idx] & self.goal_masks[p_idx])
+
+    def get_value_and_terminated(self, state, player):
+        if self.check_win(state, player):
+            return 1, True
+        if self.check_win(state, -player):
+            return -1, True
+        if np.sum(self.get_valid_moves(state, player)) == 0:
+            return 0, True
+            
+        return 0, False
+    def __init__(self, size=7):
+        self.size = size
+        self.num_squares = size * size
+        self.piece_action_size = self.num_squares
+        self.walls_action_size = (size - 1) ** 2
+        self.action_size = self.piece_action_size + 2 * self.walls_action_size
+        self.initial_walls_left = 5
+
+
+        self.move_masks = self._precompute_move_masks()
+        self.h_wall_masks = self._precompute_h_wall_masks()
+        self.v_wall_masks = self._precompute_v_wall_masks()
+        
+        self.goal_masks = [
+            sum(1 << ((self.size - 1) * self.size + c) for c in range(self.size)), # P1 (Top -> Bottom)
+            sum(1 << (0 * self.size + c) for c in range(self.size))                # P2 (Bottom -> Top)
+        ]
+
+    def _precompute_move_masks(self):
+        masks = []
+        for i in range(self.num_squares):
+            r, c = divmod(i, self.size)
+            m = {}
+            if r > 0: m['U'] = 1 << (i - self.size)
+            if r < self.size - 1: m['D'] = 1 << (i + self.size)
+            if c > 0: m['L'] = 1 << (i - 1)
+            if c < self.size - 1: m['R'] = 1 << (i + 1)
+            masks.append(m)
+        return masks
+
+    def _precompute_h_wall_masks(self):
         blocks = {}
         for r in range(self.size - 1):
             for c in range(self.size - 1):
@@ -721,7 +621,6 @@ class BitboardQuoridor:
         return blocks
 
     def _precompute_v_wall_masks(self):
-        # 특정 (from, to) 이동을 막는 세로벽 비트들을 매핑
         blocks = {}
         for r in range(self.size - 1):
             for c in range(self.size - 1):
@@ -735,19 +634,17 @@ class BitboardQuoridor:
     def get_initial_state(self):
         return {
             'p_bits': [1 << (self.size // 2), 1 << (self.num_squares - 1 - self.size // 2)],
-            'walls_h': 0, # 64비트 정수로 가로벽 관리
-            'walls_v': 0, # 64비트 정수로 세로벽 관리
+            'walls_h': 0,
+            'walls_v': 0,
             'walls_left': np.array([self.initial_walls_left, self.initial_walls_left])
         }
 
     def is_blocked(self, state, f_idx, t_idx):
-        # 비트 AND 연산으로 즉시 충돌 확인 (O(1))
         if self.h_wall_masks.get((f_idx, t_idx), 0) & state['walls_h']: return True
         if self.v_wall_masks.get((f_idx, t_idx), 0) & state['walls_v']: return True
         return False
 
     def has_path(self, state, player_idx):
-        # 비트 Flood Fill: 현재 도달 가능한 모든 칸을 비트 합집합으로 계산 (초고속)
         reachable = state['p_bits'][player_idx]
         goal_mask = self.goal_masks[player_idx]
         
@@ -755,12 +652,12 @@ class BitboardQuoridor:
             next_reachable = reachable
             temp = reachable
             while temp:
-                curr_bit = temp & -temp # 최하위 비트 추출
+                curr_bit = temp & -temp
                 curr_idx = curr_bit.bit_length() - 1
                 for _, target_bit in self.move_masks[curr_idx].items():
                     if not self.is_blocked(state, curr_idx, target_bit.bit_length() - 1):
                         next_reachable |= target_bit
-                temp &= temp - 1 # 처리한 비트 제거
+                temp &= temp - 1
             
             if next_reachable & goal_mask: return True
             if next_reachable == reachable: return False
@@ -768,7 +665,6 @@ class BitboardQuoridor:
 
     def get_next_state(self, state, action_idx, player):
         p_idx = 0 if player == 1 else 1
-        # 넘파이 배열 복사 최소화, 벽은 단순 정수 대입
         next_state = {
             'p_bits': state['p_bits'].copy(),
             'walls_h': state['walls_h'],
@@ -795,17 +691,13 @@ class BitboardQuoridor:
         curr_idx = curr_bit.bit_length() - 1
         opp_bit = state['p_bits'][opp_idx]
         
-        # 1. 말 이동(Move) - O(1) 비트 연산 기반
         for direction, target_bit in self.move_masks[curr_idx].items():
             target_idx = target_bit.bit_length() - 1
             
-            # 벽에 막혀있는지 확인
             if not self.is_blocked(state, curr_idx, target_idx):
-                # 상대방이 없다면 일반 이동
                 if target_bit != opp_bit:
                     valid_moves[target_idx] = 1
                 else:
-                    # 점프 로직: 상대방이 있을 때 같은 방향으로 점프 가능한지 확인
                     jump_masks = self.move_masks[target_idx]
                     if direction in jump_masks:
                         j_bit = jump_masks[direction]
@@ -813,31 +705,24 @@ class BitboardQuoridor:
                         if not self.is_blocked(state, target_idx, j_idx):
                             valid_moves[j_idx] = 1
 
-        # 2. 벽 설치(Wall) - 비트 마스킹 기반
         if state['walls_left'][p_idx] > 0:
             for r in range(self.size - 1):
                 for c in range(self.size - 1):
                     wall_bit = 1 << (r * (self.size - 1) + c)
                     
-                    # 가로 벽(Horizontal) 설치 가능 여부
-                    # 조건: 해당 지점에 벽이 없고, 양옆 가로벽과 겹치지 않아야 함
                     if not (state['walls_h'] & wall_bit) and not (state['walls_v'] & wall_bit):
                         overlap = False
-                        # 좌우 인접 가로벽 체크 (비트 시프트로 O(1) 확인)
                         if c > 0 and (state['walls_h'] & (wall_bit >> 1)): overlap = True
                         if c < self.size - 2 and (state['walls_h'] & (wall_bit << 1)): overlap = True
                         
                         if not overlap:
-                            # 경로 검사 (In-place 수정으로 성능 최적화)
                             state['walls_h'] |= wall_bit
                             if self.has_path(state, 0) and self.has_path(state, 1):
                                 valid_moves[self.piece_action_size + r * (self.size-1) + c] = 1
-                            state['walls_h'] &= ~wall_bit # 원복
+                            state['walls_h'] &= ~wall_bit
 
-                    # 세로 벽(Vertical) 설치 가능 여부
                     if not (state['walls_v'] & wall_bit) and not (state['walls_h'] & wall_bit):
                         overlap = False
-                        # 상하 인접 세로벽 체크
                         if r > 0 and (state['walls_v'] & (wall_bit >> (self.size - 1))): overlap = True
                         if r < self.size - 2 and (state['walls_v'] & (wall_bit << (self.size - 1))): overlap = True
                         
@@ -845,17 +730,13 @@ class BitboardQuoridor:
                             state['walls_v'] |= wall_bit
                             if self.has_path(state, 0) and self.has_path(state, 1):
                                 valid_moves[self.piece_action_size + self.walls_action_size + r * (self.size-1) + c] = 1
-                            state['walls_v'] &= ~wall_bit # 원복
+                            state['walls_v'] &= ~wall_bit
                             
         return valid_moves
     
     def check_win(self, state, player):
-        # player: 1 (Player 1, Top), -1 (Player 2, Bottom)
-        # 플레이어 인덱스 설정 (1 -> 0, -1 -> 1)
         p_idx = 0 if player == 1 else 1
         
-        # 플레이어의 현재 위치 비트와 해당 플레이어의 목표 지점 마스크를 AND 연산
-        # 결과가 0이 아니면 목표 지점에 도달한 것임
         return bool(state['p_bits'][p_idx] & self.goal_masks[p_idx])
     
     def get_value_and_terminated(self, state, action):
@@ -904,6 +785,9 @@ class BitboardQuoridor:
 
     def get_opponent_value(self, value):
         return -value
+
+    def get_opponent(self, player):
+        return -player
 
     def get_encoded_state(self, state):
         encoded_state = np.zeros((6, self.size, self.size), dtype=np.float32)
