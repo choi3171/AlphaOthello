@@ -26,7 +26,7 @@ class ResNet(nn.Module):
             nn.BatchNorm2d(32),
             nn.ReLU(),
             nn.Flatten(),
-            nn.Linear(32 * game.row_count * game.column_count, game.action_size)
+            nn.Linear(32 * (game.size**2), game.action_size)
         )
         
         self.valueHead = nn.Sequential(
@@ -34,7 +34,7 @@ class ResNet(nn.Module):
             nn.BatchNorm2d(3),
             nn.ReLU(),
             nn.Flatten(),
-            nn.Linear(3 * game.row_count * game.column_count, 1),
+            nn.Linear(3 * (game.size**2), 1),
             nn.Tanh()
         )
         
