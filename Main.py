@@ -31,7 +31,8 @@ game_dict = {
     "tictactoe": TicTacToe(),
     "connectfour": ConnectFour(),
     "othello": Othello(),
-    "gomokunaive": GomokuNaive()
+    "gomokunaive": GomokuNaive(),
+    "quoridor": Quoridor()
 }
 
 
