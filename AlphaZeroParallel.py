@@ -90,183 +90,6 @@ class MCTSParallel:
                 node.expand(spg_policy)
                 node.backpropagate(spg_value)
 
-
-# +
-class SelfPlay:
-    def __init__(self, model, game, args, monitor):
-        self.model = model
-        self.game = game
-        self.args = args
-        self.mcts = MCTSParallel(game, args, model)
-        self.monitor = monitor
-
-    def play(self):
-        return_memory = []
-        return_history = dict(win=0, draw=0, lose=0)
-        player = 1
-        spGames = [SPG(self.game) for spg in range(self.args['num_parallel_games'])]
-        
-        while len(spGames) > 0:
-            states = np.stack([spg.state for spg in spGames])
-            neutral_states = self.game.change_perspective(states, player)
-            
-            self.mcts.search(neutral_states, spGames)
-            
-            for i in range(len(spGames))[::-1]:
-                spg = spGames[i]
-                
-                action_probs = np.zeros(self.game.action_size)
-                for child in spg.root.children:
-                    action_probs[child.action_taken] = child.visit_count
-                action_probs /= np.sum(action_probs)
-
-                spg.memory.append((spg.root.state, action_probs, player))
-
-                temperature_action_probs = action_probs ** (1 / self.args['temperature'])
-                temperature_action_probs /= np.sum(temperature_action_probs)
-                action = np.random.choice(self.game.action_size, p=temperature_action_probs) # Divide temperature_action_probs with its sum in case of an error
-
-                spg.state = self.game.get_next_state(spg.state, action, player)
-
-                value, is_terminal = self.game.get_value_and_terminated(self.game.change_perspective(spg.state, player), action)
-
-                if is_terminal:
-                    if self.monitor:
-                        if value * player == 1:
-                            return_history['win'] += 1
-                        elif value * player == -1:
-                            return_history['lose'] += 1
-                        else:
-                            return_history['draw'] += 1
-                    for hist_neutral_state, hist_action_probs, hist_player in spg.memory:
-                        hist_outcome = value if hist_player == player else self.game.get_opponent_value(value)
-                        return_memory.append((
-                            self.game.get_encoded_state(hist_neutral_state),
-                            hist_action_probs,
-                            hist_outcome
-                        ))
-                    del spGames[i]
-                    
-            player = self.game.get_opponent(player)
-            
-        return return_memory, return_history
-
-class AlphaZeroParallel:
-    def __init__(self, model, optimizer, game, args, monitor=False):
-        self.model = model
-        self.optimizer = optimizer
-        self.game = game
-        self.args = args
-        self.mcts = MCTSParallel(game, args, model)
-        self.monitor = monitor
-        self.history = dict(win=0, draw=0, lose=0, policy_losses=[], value_losses=[])
-        
-    # def selfPlay(self):
-    #     return_memory = []
-    #     return_history = dict(win=0, draw=0, lose=0)
-    #     player = 1
-    #     spGames = [SPG(self.game) for spg in range(self.args['num_parallel_games'])]
-        
-    #     while len(spGames) > 0:
-    #         states = np.stack([spg.state for spg in spGames])
-    #         neutral_states = self.game.change_perspective(states, player)
-            
-    #         self.mcts.search(neutral_states, spGames)
-            
-    #         for i in range(len(spGames))[::-1]:
-    #             spg = spGames[i]
-                
-    #             action_probs = np.zeros(self.game.action_size)
-    #             for child in spg.root.children:
-    #                 action_probs[child.action_taken] = child.visit_count
-    #             action_probs /= np.sum(action_probs)
-
-    #             spg.memory.append((spg.root.state, action_probs, player))
-
-    #             temperature_action_probs = action_probs ** (1 / self.args['temperature'])
-    #             temperature_action_probs /= np.sum(temperature_action_probs)
-    #             action = np.random.choice(self.game.action_size, p=temperature_action_probs) # Divide temperature_action_probs with its sum in case of an error
-
-    #             spg.state = self.game.get_next_state(spg.state, action, player)
-
-    #             value, is_terminal = self.game.get_value_and_terminated(self.game.change_perspective(spg.state, player), action)
-
-    #             if is_terminal:
-    #                 if self.monitor:
-    #                     if value * player == 1:
-    #                         return_history['win'] += 1
-    #                     elif value * player == -1:
-    #                         return_history['lose'] += 1
-    #                     else:
-    #                         return_history['draw'] += 1
-    #                 for hist_neutral_state, hist_action_probs, hist_player in spg.memory:
-    #                     hist_outcome = value if hist_player == player else self.game.get_opponent_value(value)
-    #                     return_memory.append((
-    #                         self.game.get_encoded_state(hist_neutral_state),
-    #                         hist_action_probs,
-    #                         hist_outcome
-    #                     ))
-    #                 del spGames[i]
-                    
-    #         player = self.game.get_opponent(player)
-            
-    #     return return_memory, return_history
-                
-    def train(self, memory):
-        random.shuffle(memory)
-        for batchIdx in range(0, len(memory), self.args['batch_size']):
-            sample = memory[batchIdx:min(len(memory), batchIdx + self.args['batch_size'])] # Change to memory[batchIdx:batchIdx+self.args['batch_size']] in case of an error
-            state, policy_targets, value_targets = zip(*sample)
-            
-            state, policy_targets, value_targets = np.array(state), np.array(policy_targets), np.array(value_targets).reshape(-1, 1)
-            
-            state = torch.tensor(state, dtype=torch.float32, device=self.model.device)
-            policy_targets = torch.tensor(policy_targets, dtype=torch.float32, device=self.model.device)
-            value_targets = torch.tensor(value_targets, dtype=torch.float32, device=self.model.device)
-            
-            out_policy, out_value = self.model(state)
-            
-            policy_loss = F.cross_entropy(out_policy, policy_targets)
-            value_loss = F.mse_loss(out_value, value_targets)
-            if self.monitor:
-                self.history['policy_losses'].append(policy_loss.detach().cpu().item())
-                self.history['value_losses'].append(value_loss.detach().cpu().item())
-            loss = policy_loss + value_loss
-            
-            self.optimizer.zero_grad()
-            loss.backward()
-            self.optimizer.step()
-    
-    def learn(self):
-        for iteration in range(self.args['num_iterations']):
-            memory = []
-            
-            self.model.eval()
-            for selfPlay_iteration in trange(self.args['num_selfPlay_iterations'] // self.args['num_parallel_games']):
-                selfPlayIns = SelfPlay(self.model, self.game, self.args, self.monitor)
-                return_memory, return_history = selfPlayIns.play()
-                memory += return_memory
-                self.add_history(return_history)
-                
-            self.model.train()
-            for epoch in trange(self.args['num_epochs']):
-                self.train(memory)
-
-            if self.monitor:
-                file = open(f"./saved_history/history_{iteration}_{self.game}.pickle", "wb")
-                pickle.dump(self.history, file)
-                file.close()
-                # print(self.history)
-                self.history = dict(win=0, draw=0, lose=0, policy_losses=[], value_losses=[])
-            
-            torch.save(self.model.state_dict(), f"./saved_model/model_{iteration}_{self.game}.pt")
-            torch.save(self.optimizer.state_dict(), f"./saved_model/optimizer_{iteration}_{self.game}.pt")
-
-    def add_history(self, return_history):
-        for key, value in return_history.items():
-            self.history[key] += value
-
-
 # +
 @ray.remote(num_cpus=1, num_gpus=0.05)
 class SelfPlayRay:
@@ -395,16 +218,16 @@ class AlphaZeroParallelRay:
         actors = [
             SelfPlayRay.options(num_cpus=cpu_per_actor, num_gpus=gpu_per_actor).remote(self.model, self.game, self.args, self.monitor) for _ in range(distributed_num)]
 
+        self.model.to(self.model.device) 
+        self.model.train()
+        
         for iteration in range(self.args["num_iterations"]):
             print(f"Iteration {iteration} Start...")
 
             memory = []
-
-            current_weights = ray.put(self.model.cpu().state_dict())
-            [actor.set_weights.remote(current_weights) for actor in actors]
-
-            self.model.to(self.args['device'])
-            self.model.eval()
+            cpu_weights = {k: v.cpu() for k, v in self.model.state_dict().items()}
+            weights_id = ray.put(cpu_weights)
+            [actor.set_weights.remote(weights_id) for actor in actors]
 
             futures = [actor.play.remote() for actor in actors]
             memory_list = ray.get(futures)
@@ -413,7 +236,7 @@ class AlphaZeroParallelRay:
                 return_memory, return_history = memory_list[i]
                 memory += return_memory
                 self.add_history(return_history)
-                self.log_image(f'final_state/{iteration}', self.game.get_visualized_state(return_history['final_state']), i)
+                # self.log_image(f'final_state/{iteration}', self.game.get_visualized_state(return_history['final_state']), i)
                 print(len(return_memory))
             
             self.log_scalars('wining_rate', {'win': self.history['win'] / self.args['num_selfPlay_iterations'],
