@@ -11,6 +11,9 @@ import pickle
 import ray
 import os
 
+import time # debug
+import cProfile, pstats, io # debug
+
 class MCTSParallel:
     def __init__(self, game, args, model):
         self.game = game
@@ -104,6 +107,8 @@ class SelfPlayRay:
         self.model.load_state_dict(weights)
 
     def play(self):
+        pr = cProfile.Profile()
+        pr.enable()
         return_memory = []
         return_history = dict(win=0, draw=0, lose=0, final_state=None, average_depth=[], max_depth=[])
         player = 1
@@ -115,7 +120,14 @@ class SelfPlayRay:
             states = np.stack([spg.state for spg in spGames])
             neutral_states = self.game.change_perspective(states, player)
             
+            start_time = time.time()
+
             self.mcts.search(neutral_states, spGames)
+            
+            end_time = time.time()
+
+            if end_time - start_time > 0.1:
+                print(f"Slow Move Detect: {end_time - start_time:.4f}") # debug
 
             average_depth = 0
             max_depth = 0
@@ -141,7 +153,7 @@ class SelfPlayRay:
                 temperature_action_probs /= np.sum(temperature_action_probs)
                 action = np.random.choice(self.game.action_size, p=temperature_action_probs) # Divide temperature_action_probs with its sum in case of an error
 
-                spg.state = self.game.get_next_state(spg.state, action, player)
+                spg.state = self.game.get_next_state(spg.state, action)
 
                 value, is_terminal = self.game.get_value_and_terminated(self.game.change_perspective(spg.state, player), action)
 
@@ -169,6 +181,14 @@ class SelfPlayRay:
             return_history['max_depth'].append(max_depth)
             
             player = self.game.get_opponent(player)
+            
+        pr.disable()
+        pid = os.getpid() 
+        filename = f"profile_{pid}.txt"
+
+        with open(filename, "w") as f:
+            ps = pstats.Stats(pr, stream=f).sort_stats('tottime')
+            ps.print_stats(20)
             
         return return_memory, return_history
 
