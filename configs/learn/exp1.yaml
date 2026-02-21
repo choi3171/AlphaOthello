@@ -8,3 +8,8 @@ batch_size: 64
 temperature: 1.25
 dirichlet_epsilon: 0.25
 dirichlet_alpha: 0.3
+cpp_selfplay_path: ./cpp_selfplay
+cpp_nn_server_threads: 1
+cpp_nn_max_batch_size: 32
+cpp_use_cuda: true
+cpp_cuda_device_id: 0
