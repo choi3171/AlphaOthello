@@ -1,4 +1,5 @@
 cmake_minimum_required(VERSION 3.14)
+set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
 project(cpp_selfplay LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -12,6 +13,8 @@ add_executable(
   gomoku.cpp
   onnx_infer.cpp
 )
+
+target_compile_options(cpp_selfplay PRIVATE -O3 -march=native -ffast-math -flto)
 
 if(NOT DEFINED ONNXRUNTIME_DIR)
   message(FATAL_ERROR "Set ONNXRUNTIME_DIR to your onnxruntime installation root")
