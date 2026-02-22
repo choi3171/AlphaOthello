@@ -24,6 +24,7 @@ struct CliArgs {
   int threads = -1;
   int nn_server_threads = 1;
   int nn_max_batch_size = 64;
+  int parallel_games = 1;
   bool use_cuda = false;
   int cuda_device_id = 0;
   uint64_t seed = 0;
@@ -36,6 +37,7 @@ void print_usage() {
       << "Usage: ./cpp_selfplay --onnx <model.onnx> --out <memory.bin> --games <N>"
       << " --searches <M> --cpuct <C> --temp <T> --threads <K> --seed <S>"
       << " --dirichlet-epsilon <E> --dirichlet-alpha <A>"
+      << " [--parallel-games <N>]"
       << " [--nn-server-threads <N>] [--nn-max-batch-size <N>]"
       << " [--use-cuda] [--cuda-device-id <ID>]"
       << " [--stats-out <stats.bin>]\n";
@@ -82,6 +84,8 @@ CliArgs parse_args(int argc, char** argv) {
       args.nn_server_threads = std::stoi(next("--nn-server-threads"));
     } else if (key == "--nn-max-batch-size") {
       args.nn_max_batch_size = std::stoi(next("--nn-max-batch-size"));
+    } else if (key == "--parallel-games") {
+      args.parallel_games = std::stoi(next("--parallel-games"));
     } else if (key == "--use-cuda") {
       args.use_cuda = true;
     } else if (key == "--cuda-device-id") {
@@ -112,6 +116,9 @@ CliArgs parse_args(int argc, char** argv) {
   if (args.nn_max_batch_size <= 0) {
     args.nn_max_batch_size = 1;
   }
+  if (args.parallel_games <= 0) {
+    args.parallel_games = 1;
+  }
   return args;
 }
 
@@ -131,6 +138,7 @@ int main(int argc, char** argv) {
     params.temperature = cli.temp;
     params.dirichlet_epsilon = cli.dirichlet_epsilon;
     params.dirichlet_alpha = cli.dirichlet_alpha;
+    params.parallel_games = cli.parallel_games;
 
     const auto all_start = std::chrono::steady_clock::now();
     const auto infer_init_start = std::chrono::steady_clock::now();
@@ -202,10 +210,12 @@ int main(int argc, char** argv) {
     std::cout << "[profile] nn query_count=" << infer_prof.query_count
               << " batch_count=" << infer_prof.worker_batch_count
               << " item_count=" << infer_prof.worker_item_count
-              << " query_wait=" << to_sec(infer_prof.queue_wait_ns) << "s"
-              << " batch_collect=" << to_sec(infer_prof.worker_batch_collect_ns) << "s"
+              << " bind_io=" << to_sec(infer_prof.worker_bind_io_ns) << "s"
               << " input_build=" << to_sec(infer_prof.worker_input_build_ns) << "s"
               << " ort_run=" << to_sec(infer_prof.worker_ort_run_ns) << "s"
+              << " ort_output_fetch=" << to_sec(infer_prof.worker_ort_output_fetch_ns) << "s"
+              << " softmax=" << to_sec(infer_prof.worker_softmax_ns) << "s"
+              << " writeback=" << to_sec(infer_prof.worker_writeback_ns) << "s"
               << " postprocess=" << to_sec(infer_prof.worker_postprocess_ns) << "s\n";
     return 0;
   } catch (const std::exception& e) {

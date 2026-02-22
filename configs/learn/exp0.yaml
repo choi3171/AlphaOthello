@@ -1,8 +1,8 @@
 ﻿C: 2.0
 num_searches: 60
-num_iterations: 1
+num_iterations: 3
 num_selfPlay_iterations: 500
-num_parallel_games: 100
+num_parallel_games: 50
 num_epochs: 4
 batch_size: 64
 temperature: 1.25

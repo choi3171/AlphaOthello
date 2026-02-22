@@ -308,6 +308,169 @@ std::array<float, gomoku::kActionSize> run_mcts(
   return action_probs;
 }
 
+std::vector<std::pair<std::array<float, gomoku::kActionSize>, float>> infer_batch_with_profile(
+    OnnxInfer& infer,
+    const std::vector<gomoku::Board>& states,
+    AtomicSearchProfile* profile) {
+  if (states.empty()) {
+    return {};
+  }
+  const auto infer_start = std::chrono::steady_clock::now();
+  auto results = infer.infer_batch(states);
+  if (profile != nullptr) {
+    const auto infer_end = std::chrono::steady_clock::now();
+    const auto ns = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(infer_end - infer_start).count());
+    profile->infer_total_ns.fetch_add(ns, std::memory_order_relaxed);
+    profile->infer_calls.fetch_add(
+        static_cast<uint64_t>(states.size()), std::memory_order_relaxed);
+  }
+  return results;
+}
+
+std::vector<std::array<float, gomoku::kActionSize>> run_mcts_batch(
+    OnnxInfer& infer,
+    const std::vector<gomoku::Board>& canonical_roots,
+    const SearchParams& params,
+    std::mt19937& rng,
+    AtomicSearchProfile* profile,
+    std::vector<float>* average_leaf_depths,
+    std::vector<float>* max_leaf_depths) {
+  const size_t num_roots = canonical_roots.size();
+  std::vector<std::array<float, gomoku::kActionSize>> all_action_probs(num_roots);
+  if (num_roots == 0) {
+    return all_action_probs;
+  }
+  ScopedAddNs mcts_timer(profile ? &profile->mcts_total_ns : nullptr);
+  if (profile != nullptr) {
+    profile->mcts_calls.fetch_add(
+        static_cast<uint64_t>(num_roots), std::memory_order_relaxed);
+  }
+
+  std::vector<Node> roots(num_roots);
+  std::vector<std::vector<int>> root_valid_moves(num_roots);
+  for (size_t i = 0; i < num_roots; i++) {
+    roots[i].state = canonical_roots[i];
+    roots[i].visit_count = 1;
+    root_valid_moves[i] = gomoku::valid_moves(roots[i].state);
+  }
+
+  const auto root_evals = infer_batch_with_profile(infer, canonical_roots, profile);
+  for (size_t i = 0; i < num_roots; i++) {
+    std::array<float, gomoku::kActionSize> root_policy = root_evals[i].first;
+    root_policy = masked_normalized_policy(root_policy, root_valid_moves[i]);
+    apply_dirichlet_noise(
+        root_policy,
+        root_valid_moves[i],
+        params.dirichlet_epsilon,
+        params.dirichlet_alpha,
+        rng);
+    root_policy = masked_normalized_policy(root_policy, root_valid_moves[i]);
+    expand(roots[i], root_policy);
+  }
+
+  std::vector<int> depth_sum(num_roots, 0);
+  std::vector<int> depth_max(num_roots, 0);
+  std::vector<int> depth_count(num_roots, 0);
+  std::vector<Node*> leaves(num_roots, nullptr);
+  std::vector<bool> leaf_is_terminal(num_roots, false);
+  std::vector<float> leaf_terminal_value(num_roots, 0.0f);
+  std::vector<gomoku::Board> eval_states;
+  eval_states.reserve(num_roots);
+
+  for (int s = 0; s < params.num_searches; s++) {
+    std::fill(leaves.begin(), leaves.end(), nullptr);
+    std::fill(leaf_is_terminal.begin(), leaf_is_terminal.end(), false);
+    std::fill(leaf_terminal_value.begin(), leaf_terminal_value.end(), 0.0f);
+    eval_states.clear();
+
+    for (size_t i = 0; i < num_roots; i++) {
+      Node* node = &roots[i];
+      int depth = 0;
+      while (!node->children.empty()) {
+        node = select_child(*node, params.cpuct);
+        if (node == nullptr) {
+          break;
+        }
+        depth++;
+      }
+      if (node == nullptr) {
+        continue;
+      }
+
+      depth_sum[i] += depth;
+      depth_max[i] = std::max(depth_max[i], depth);
+      depth_count[i] += 1;
+      leaves[i] = node;
+
+      if (evaluate_terminal(*node)) {
+        leaf_is_terminal[i] = true;
+        leaf_terminal_value[i] = node->terminal_value;
+      } else {
+        eval_states.push_back(node->state);
+      }
+    }
+
+    auto eval_results = infer_batch_with_profile(infer, eval_states, profile);
+    size_t eval_idx = 0;
+    for (size_t i = 0; i < num_roots; i++) {
+      Node* node = leaves[i];
+      if (node == nullptr) {
+        continue;
+      }
+      if (leaf_is_terminal[i]) {
+        backpropagate(node, leaf_terminal_value[i]);
+        continue;
+      }
+      const auto& eval = eval_results[eval_idx++];
+      std::array<float, gomoku::kActionSize> policy = eval.first;
+      const float value = eval.second;
+      const std::vector<int> valid = gomoku::valid_moves(node->state);
+      policy = masked_normalized_policy(policy, valid);
+      expand(*node, policy);
+      backpropagate(node, value);
+    }
+  }
+
+  for (size_t i = 0; i < num_roots; i++) {
+    auto& action_probs = all_action_probs[i];
+    action_probs.fill(0.0f);
+    float sum_visits = 0.0f;
+    for (const auto& child : roots[i].children) {
+      action_probs[child->action_taken] = static_cast<float>(child->visit_count);
+      sum_visits += action_probs[child->action_taken];
+    }
+
+    if (sum_visits <= 1e-12f) {
+      if (!root_valid_moves[i].empty()) {
+        const float uniform = 1.0f / static_cast<float>(root_valid_moves[i].size());
+        for (int a : root_valid_moves[i]) {
+          action_probs[a] = uniform;
+        }
+      }
+    } else {
+      for (int a = 0; a < gomoku::kActionSize; a++) {
+        action_probs[a] /= sum_visits;
+      }
+    }
+  }
+
+  if (average_leaf_depths != nullptr) {
+    average_leaf_depths->assign(num_roots, 0.0f);
+    for (size_t i = 0; i < num_roots; i++) {
+      (*average_leaf_depths)[i] =
+          (depth_count[i] > 0) ? (static_cast<float>(depth_sum[i]) / depth_count[i]) : 0.0f;
+    }
+  }
+  if (max_leaf_depths != nullptr) {
+    max_leaf_depths->assign(num_roots, 0.0f);
+    for (size_t i = 0; i < num_roots; i++) {
+      (*max_leaf_depths)[i] = static_cast<float>(depth_max[i]);
+    }
+  }
+  return all_action_probs;
+}
+
 int sample_action(
     const std::array<float, gomoku::kActionSize>& probs,
     const std::vector<int>& valid_moves,
@@ -361,6 +524,39 @@ struct GameResult {
   std::vector<float> average_depth;
   std::vector<float> max_depth;
 };
+
+struct ActiveGame {
+  gomoku::Board board = gomoku::initial_board();
+  int8_t player = 1;
+  std::vector<HistStep> hist;
+  std::vector<float> average_depth;
+  std::vector<float> max_depth;
+  std::chrono::steady_clock::time_point start_time = std::chrono::steady_clock::now();
+};
+
+GameResult finalize_game(ActiveGame&& game, int winner) {
+  std::vector<TrainingRow> rows;
+  rows.reserve(game.hist.size());
+  for (const HistStep& h : game.hist) {
+    TrainingRow row;
+    row.state = h.canonical;
+    row.policy = h.policy;
+    if (winner == 0) {
+      row.value = 0.0f;
+    } else {
+      row.value = (winner == h.player) ? 1.0f : -1.0f;
+    }
+    rows.push_back(row);
+  }
+
+  GameResult result;
+  result.rows = std::move(rows);
+  result.winner = winner;
+  result.final_state = game.board;
+  result.average_depth = std::move(game.average_depth);
+  result.max_depth = std::move(game.max_depth);
+  return result;
+}
 
 GameResult play_one_game(
     OnnxInfer& infer,
@@ -444,6 +640,10 @@ SelfplayResult run_selfplay_games(
     num_threads = 1;
   }
 
+  // Interpret params.parallel_games as "parallel games per worker thread".
+  const int parallel_games_per_worker = std::max(1, params.parallel_games);
+  const int num_workers = std::max(1, std::min(num_threads, num_games));
+
   std::atomic<int> next_game(0);
   AtomicSearchProfile atomic_profile;
   std::mutex result_mutex;
@@ -453,29 +653,106 @@ SelfplayResult run_selfplay_games(
   result.stats.final_states.reserve(static_cast<size_t>(num_games));
 
   std::vector<std::thread> workers;
-  workers.reserve(num_threads);
-  for (int t = 0; t < num_threads; t++) {
-    workers.emplace_back([&, t]() {
+  workers.reserve(num_workers);
+  for (int t = 0; t < num_workers; t++) {
+    const int local_parallel_games = parallel_games_per_worker;
+    workers.emplace_back([&, t, local_parallel_games]() {
       std::mt19937 rng(static_cast<uint32_t>(seed + 10007ULL * static_cast<uint64_t>(t)));
+      std::vector<ActiveGame> active_games;
+      active_games.reserve(static_cast<size_t>(std::max(1, local_parallel_games)));
+
+      auto refill_active_games = [&]() {
+        while (static_cast<int>(active_games.size()) < local_parallel_games) {
+          const int game_idx = next_game.fetch_add(1);
+          if (game_idx >= num_games) {
+            break;
+          }
+          ActiveGame game;
+          game.hist.reserve(gomoku::kActionSize);
+          game.average_depth.reserve(gomoku::kActionSize);
+          game.max_depth.reserve(gomoku::kActionSize);
+          game.start_time = std::chrono::steady_clock::now();
+          active_games.push_back(std::move(game));
+        }
+      };
+
+      refill_active_games();
       while (true) {
-        const int game_idx = next_game.fetch_add(1);
-        if (game_idx >= num_games) {
+        if (active_games.empty()) {
           break;
         }
-        GameResult game_result = play_one_game(infer, params, rng, &atomic_profile);
-        std::lock_guard<std::mutex> lock(result_mutex);
-        result.rows.insert(
-            result.rows.end(), game_result.rows.begin(), game_result.rows.end());
-        result.stats.average_depth_lists.push_back(std::move(game_result.average_depth));
-        result.stats.max_depth_lists.push_back(std::move(game_result.max_depth));
-        result.stats.final_states.push_back(game_result.final_state);
-        if (game_result.winner == 1) {
-          result.stats.win += 1;
-        } else if (game_result.winner == -1) {
-          result.stats.lose += 1;
-        } else {
-          result.stats.draw += 1;
+
+        std::vector<gomoku::Board> canonical_states(active_games.size());
+        for (size_t i = 0; i < active_games.size(); i++) {
+          canonical_states[i] =
+              gomoku::canonical_board(active_games[i].board, active_games[i].player);
         }
+
+        std::vector<float> average_depths;
+        std::vector<float> max_depths;
+        const auto all_action_probs = run_mcts_batch(
+            infer,
+            canonical_states,
+            params,
+            rng,
+            &atomic_profile,
+            &average_depths,
+            &max_depths);
+
+        for (int i = static_cast<int>(active_games.size()) - 1; i >= 0; i--) {
+          ActiveGame& game = active_games[static_cast<size_t>(i)];
+          game.average_depth.push_back(average_depths[static_cast<size_t>(i)]);
+          game.max_depth.push_back(max_depths[static_cast<size_t>(i)]);
+
+          HistStep step;
+          step.canonical = canonical_states[static_cast<size_t>(i)];
+          step.policy = all_action_probs[static_cast<size_t>(i)];
+          step.player = game.player;
+          game.hist.push_back(step);
+
+          const std::vector<int> valid = gomoku::valid_moves(game.board);
+          const int action = sample_action(
+              all_action_probs[static_cast<size_t>(i)], valid, params.temperature, rng);
+
+          gomoku::apply_move(game.board, action, game.player);
+          const bool win = gomoku::check_win(game.board, action, game.player);
+          const bool full = gomoku::is_full(game.board);
+          if (win || full) {
+            const auto game_end_time = std::chrono::steady_clock::now();
+            const auto game_ns = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    game_end_time - game.start_time)
+                    .count());
+            atomic_profile.game_total_ns.fetch_add(game_ns, std::memory_order_relaxed);
+            atomic_profile.games.fetch_add(1, std::memory_order_relaxed);
+
+            const int winner = win ? game.player : 0;
+            GameResult game_result = finalize_game(std::move(game), winner);
+            {
+              std::lock_guard<std::mutex> lock(result_mutex);
+              result.rows.insert(
+                  result.rows.end(), game_result.rows.begin(), game_result.rows.end());
+              result.stats.average_depth_lists.push_back(std::move(game_result.average_depth));
+              result.stats.max_depth_lists.push_back(std::move(game_result.max_depth));
+              result.stats.final_states.push_back(game_result.final_state);
+              if (game_result.winner == 1) {
+                result.stats.win += 1;
+              } else if (game_result.winner == -1) {
+                result.stats.lose += 1;
+              } else {
+                result.stats.draw += 1;
+              }
+            }
+
+            if (static_cast<size_t>(i) + 1 != active_games.size()) {
+              active_games[static_cast<size_t>(i)] = std::move(active_games.back());
+            }
+            active_games.pop_back();
+          } else {
+            game.player = static_cast<int8_t>(-game.player);
+          }
+        }
+        refill_active_games();
       }
     });
   }
