@@ -220,4 +220,14 @@ $RECYCLE.BIN/
 my_module.py
 my_module2.py
 
+# Ignore saved models
+saved_model/
+
+# Ignore tmp files
+tmp_cpp_selfplay/
+
+# Ignore log files
+logs/
+
+
 # End of https://www.toptal.com/developers/gitignore/api/windows,jupyternotebooks,python
