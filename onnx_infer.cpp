@@ -34,14 +34,12 @@ OnnxInfer::OnnxInfer(
     const std::string& model_path,
     bool use_cuda,
     int cuda_device_id,
-    int num_server_threads,
     int max_batch_size)
     : env_(ORT_LOGGING_LEVEL_WARNING, "cpp_selfplay"),
       session_options_(),
       session_(nullptr),
       cpu_memory_info_(Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault)),
       max_batch_size_(std::max(1, max_batch_size)) {
-  session_options_.SetIntraOpNumThreads(std::max(1, num_server_threads));
   session_options_.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
 
   if (use_cuda) {

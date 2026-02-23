@@ -1,5 +1,6 @@
 import os
 import random
+import re
 import struct
 import subprocess
 import time
@@ -66,11 +67,19 @@ class AlphaZeroParallel:
 
     def _run_cpp_selfplay(self, onnx_path, memory_path, stats_path, iteration):
         cpp_bin = self.args.get("cpp_selfplay_path", "./cpp_selfplay")
-        threads = self.args.get("cpp_threads", max(1, (os.cpu_count() or 2) - 2))
-        nn_server_threads = int(self.args.get("cpp_nn_server_threads", 1))
+        threads = int(self.args.get("cpp_threads", 0))
         nn_max_batch_size = int(self.args.get("cpp_nn_max_batch_size", 64))
         use_cuda = bool(self.args.get("cpp_use_cuda", torch.cuda.is_available()))
         cuda_device_id = int(self.args.get("cpp_cuda_device_id", 0))
+        temp = float(self.args.get("temperature", self.args.get("chosenMoveTemperature", 1.0)))
+        temp_early = float(
+            self.args.get("temperature_early", self.args.get("chosenMoveTemperatureEarly", temp))
+        )
+        temp_halflife = float(
+            self.args.get(
+                "temperature_halflife", self.args.get("chosenMoveTemperatureHalflife", 19.0)
+            )
+        )
         seed_base = self.args.get("seed", 0)
         seed = int(seed_base + iteration)
 
@@ -91,11 +100,13 @@ class AlphaZeroParallel:
             "--cpuct",
             str(self.args["C"]),
             "--temp",
-            str(self.args["temperature"]),
+            str(temp),
+            "--temp-early",
+            str(temp_early),
+            "--temp-halflife",
+            str(temp_halflife),
             "--threads",
             str(threads),
-            "--nn-server-threads",
-            str(nn_server_threads),
             "--nn-max-batch-size",
             str(nn_max_batch_size),
             "--seed",
@@ -131,6 +142,7 @@ class AlphaZeroParallel:
             "save_sec",
             "iteration_total_sec",
             "memory_rows",
+            "train_rows",
             "selfplay_rows_per_sec",
         ]
         need_header = not os.path.exists(self.timing_profile_path)
@@ -171,6 +183,54 @@ class AlphaZeroParallel:
                 encoded_state = self.game.get_encoded_state(state)
                 memory.append((encoded_state, policy, value))
         return memory
+
+    def _load_replay_memory(self, iteration, current_memory=None):
+        replay_memory_iters = max(0, int(self.args.get("replay_memory_iters", 0)))
+        start_iter = max(0, iteration - replay_memory_iters)
+        merged_memory = []
+        loaded = []
+
+        for i in range(start_iter, iteration + 1):
+            if i == iteration and current_memory is not None:
+                merged_memory.extend(current_memory)
+                loaded.append((i, len(current_memory)))
+                continue
+            path = f"./tmp_cpp_selfplay/memory_{i}.bin"
+            if not os.path.exists(path):
+                if i == iteration:
+                    raise RuntimeError(f"Missing current memory file: {path}")
+                continue
+            chunk = self._load_memory_bin(path)
+            merged_memory.extend(chunk)
+            loaded.append((i, len(chunk)))
+
+        return merged_memory, loaded
+
+    def _cleanup_stale_memory_bins(self, iteration):
+        replay_memory_iters = max(0, int(self.args.get("replay_memory_iters", 0)))
+        start_iter = max(0, iteration - replay_memory_iters)
+        mem_dir = "./tmp_cpp_selfplay"
+        removed = []
+
+        if not os.path.isdir(mem_dir):
+            return removed
+
+        pattern = re.compile(r"^memory_(\d+)\.bin$")
+        for name in os.listdir(mem_dir):
+            match = pattern.match(name)
+            if match is None:
+                continue
+            idx = int(match.group(1))
+            if idx >= start_iter:
+                continue
+            path = os.path.join(mem_dir, name)
+            try:
+                os.remove(path)
+                removed.append(idx)
+            except OSError:
+                # Ignore cleanup failures; training can continue with extra files.
+                pass
+        return sorted(removed)
 
     def _load_stats_bin(self, stats_path):
         def read_u32(f):
@@ -281,10 +341,14 @@ class AlphaZeroParallel:
             selfplay_sec = time.perf_counter() - t0
 
             t0 = time.perf_counter()
-            memory = self._load_memory_bin(memory_path)
+            current_memory = self._load_memory_bin(memory_path)
+            memory, loaded_replay = self._load_replay_memory(iteration, current_memory=current_memory)
             memory_load_sec = time.perf_counter() - t0
-            if len(memory) == 0:
+            if len(current_memory) == 0:
                 raise RuntimeError("C++ selfplay returned empty memory")
+            if len(memory) == 0:
+                raise RuntimeError("Replay memory is empty")
+            removed_stale = self._cleanup_stale_memory_bins(iteration)
 
             t0 = time.perf_counter()
             stats = self._load_stats_bin(stats_path)
@@ -295,7 +359,8 @@ class AlphaZeroParallel:
             if self.monitor:
                 t0 = time.perf_counter()
                 self.log_scalar("selfplay/time_sec", elapsed, iteration)
-                self.log_scalar("selfplay/memory_rows", len(memory), iteration)
+                self.log_scalar("selfplay/memory_rows", len(current_memory), iteration)
+                self.log_scalar("selfplay/train_rows", len(memory), iteration)
                 self.log_scalars(
                     "wining_rate",
                     {
@@ -311,7 +376,15 @@ class AlphaZeroParallel:
                 self.log_list(f"max_depth/{iteration}", self.calculate_average(self.history["max_depth"]))
 
                 max_image_count = self.args.get("max_final_state_logs", 16)
-                for i, board in enumerate(stats["final_states"][:max_image_count]):
+                final_states = stats["final_states"]
+                sample_count = min(max_image_count, len(final_states))
+                if sample_count < len(final_states):
+                    log_seed = int(self.args.get("seed", 0)) + 1000003 * iteration + 17
+                    selected = random.Random(log_seed).sample(range(len(final_states)), sample_count)
+                else:
+                    selected = list(range(sample_count))
+                for i, board_idx in enumerate(selected):
+                    board = final_states[board_idx]
                     self.log_image(
                         f"final_state/{iteration}", self.game.get_visualized_state(board), i
                     )
@@ -335,7 +408,7 @@ class AlphaZeroParallel:
             train_epoch_avg_sec = float(np.mean(epoch_times)) if epoch_times else 0.0
             train_epoch_min_sec = float(np.min(epoch_times)) if epoch_times else 0.0
             train_epoch_max_sec = float(np.max(epoch_times)) if epoch_times else 0.0
-            rows_per_sec = (len(memory) / selfplay_sec) if selfplay_sec > 1e-9 else 0.0
+            rows_per_sec = (len(current_memory) / selfplay_sec) if selfplay_sec > 1e-9 else 0.0
 
             print(
                 f"[profile][iter {iteration}] "
@@ -347,9 +420,15 @@ class AlphaZeroParallel:
                 f"train={train_total_sec:.3f}s "
                 f"save={save_sec:.3f}s "
                 f"total={iteration_total_sec:.3f}s "
-                f"rows={len(memory)} "
+                f"rows={len(current_memory)} "
+                f"train_rows={len(memory)} "
                 f"rows_per_sec={rows_per_sec:.1f}"
             )
+            if loaded_replay:
+                replay_desc = ",".join(f"{idx}:{cnt}" for idx, cnt in loaded_replay)
+                print(f"[profile][iter {iteration}] replay_memory_iters={self.args.get('replay_memory_iters', 0)} loaded={replay_desc}")
+            if removed_stale:
+                print(f"[profile][iter {iteration}] removed_stale_memory_bins={removed_stale}")
             print(
                 f"[profile][iter {iteration}] "
                 f"train_epoch_sec min/avg/max="
@@ -369,7 +448,8 @@ class AlphaZeroParallel:
                 train_epoch_max_sec=f"{train_epoch_max_sec:.6f}",
                 save_sec=f"{save_sec:.6f}",
                 iteration_total_sec=f"{iteration_total_sec:.6f}",
-                memory_rows=len(memory),
+                memory_rows=len(current_memory),
+                train_rows=len(memory),
                 selfplay_rows_per_sec=f"{rows_per_sec:.3f}",
             )
             self._append_timing_profile(timing_row)

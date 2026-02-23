@@ -86,7 +86,8 @@ int select_child(int node_idx, const std::vector<Node>& tree, float cpuct) {
 bool evaluate_terminal(Node& node) {
   if (node.terminal_known) return node.terminal;
   node.terminal_known = true;
-  if (node.action_taken >= 0 && gomoku::check_win(node.state, node.action_taken, -1)) {
+  if (node.action_taken >= 0 &&
+      gomoku::check_win(node.state, node.action_taken, -1)) {
     node.terminal = true;
     node.terminal_value = -1.0f;
     return true;
@@ -318,7 +319,8 @@ int sample_action(const std::array<float, gomoku::kActionSize>& probs, const gom
     sum += w;
   }
   if (sum <= 1e-12) {
-    std::uniform_int_distribution<int> dist(0, static_cast<int>(valid_moves.size()) - 1);
+    std::uniform_int_distribution<int> dist(
+        0, static_cast<int>(valid_moves.size()) - 1);
     return valid_moves[dist(rng)];
   }
   for (double& w : weights) {
@@ -364,7 +366,8 @@ struct ActiveGame {
   std::vector<HistStep> hist;
   std::vector<float> average_depth;
   std::vector<float> max_depth;
-  std::chrono::steady_clock::time_point start_time = std::chrono::steady_clock::now();
+  std::chrono::steady_clock::time_point start_time =
+      std::chrono::steady_clock::now();
 };
 
 GameResult finalize_game(ActiveGame&& game, int winner) {
@@ -426,7 +429,8 @@ SelfplayResult run_selfplay_games(OnnxInfer& infer, const SearchParams& params, 
       thread_tree_pool.reserve(static_cast<size_t>(params.num_searches * local_parallel_games * 20));
 
       std::vector<ActiveGame> active_games;
-      active_games.reserve(static_cast<size_t>(std::max(1, local_parallel_games)));
+      active_games.reserve(
+          static_cast<size_t>(std::max(1, local_parallel_games)));
 
       auto refill_active_games = [&]() {
         while (static_cast<int>(active_games.size()) < local_parallel_games) {
@@ -502,7 +506,8 @@ SelfplayResult run_selfplay_games(OnnxInfer& infer, const SearchParams& params, 
             }
 
             if (static_cast<size_t>(i) + 1 != active_games.size()) {
-              active_games[static_cast<size_t>(i)] = std::move(active_games.back());
+              active_games[static_cast<size_t>(i)] =
+                  std::move(active_games.back());
             }
             active_games.pop_back();
           } else {
@@ -518,15 +523,21 @@ SelfplayResult run_selfplay_games(OnnxInfer& infer, const SearchParams& params, 
     w.join();
   }
   result.profile.games = atomic_profile.games.load(std::memory_order_relaxed);
-  result.profile.game_total_ns = atomic_profile.game_total_ns.load(std::memory_order_relaxed);
-  result.profile.mcts_calls = atomic_profile.mcts_calls.load(std::memory_order_relaxed);
-  result.profile.mcts_total_ns = atomic_profile.mcts_total_ns.load(std::memory_order_relaxed);
-  result.profile.infer_calls = atomic_profile.infer_calls.load(std::memory_order_relaxed);
-  result.profile.infer_total_ns = atomic_profile.infer_total_ns.load(std::memory_order_relaxed);
+  result.profile.game_total_ns =
+      atomic_profile.game_total_ns.load(std::memory_order_relaxed);
+  result.profile.mcts_calls =
+      atomic_profile.mcts_calls.load(std::memory_order_relaxed);
+  result.profile.mcts_total_ns =
+      atomic_profile.mcts_total_ns.load(std::memory_order_relaxed);
+  result.profile.infer_calls =
+      atomic_profile.infer_calls.load(std::memory_order_relaxed);
+  result.profile.infer_total_ns =
+      atomic_profile.infer_total_ns.load(std::memory_order_relaxed);
   return result;
 }
 
-void write_memory_file(const std::string& path, const std::vector<TrainingRow>& rows) {
+void write_memory_file(const std::string& path,
+                       const std::vector<TrainingRow>& rows) {
   std::ofstream out(path, std::ios::binary | std::ios::trunc);
   if (!out) {
     throw std::runtime_error("failed to open output file: " + path);
