@@ -10,7 +10,7 @@ add_executable(
   cpp_selfplay
   main.cpp
   search.cpp
-  gomoku.cpp
+  quoridor.cpp
   onnx_infer.cpp
 )
 
