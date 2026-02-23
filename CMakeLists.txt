@@ -10,7 +10,7 @@ add_executable(
   cpp_selfplay
   main.cpp
   search.cpp
-  gomoku.cpp
+  quoridor.cpp
   onnx_infer.cpp
 )
 
@@ -21,6 +21,7 @@ if(NOT DEFINED ONNXRUNTIME_DIR)
 endif()
 
 target_include_directories(cpp_selfplay PRIVATE ${ONNXRUNTIME_DIR}/include)
+target_include_directories(cpp_selfplay PRIVATE ${CUDAToolkit_DIR})
 
 find_library(
   ONNXRUNTIME_LIB
@@ -31,4 +32,6 @@ find_library(
 )
 
 find_package(Threads REQUIRED)
+find_package(CUDAToolkit REQUIRED)
+
 target_link_libraries(cpp_selfplay PRIVATE ${ONNXRUNTIME_LIB} Threads::Threads)

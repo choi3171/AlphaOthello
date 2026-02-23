@@ -5,21 +5,23 @@
 #include <string>
 #include <vector>
 
-#include "gomoku.h"
 #include "onnx_infer.h"
+#include "quoridor.h"
 
 struct SearchParams {
   int num_searches = 64;
   float cpuct = 2.0f;
   float temperature = 1.0f;
+  float temperature_early = 1.0f;
+  float temperature_halflife = 19.0f;
   float dirichlet_epsilon = 0.25f;
   float dirichlet_alpha = 0.3f;
   int parallel_games = 1;
 };
 
 struct TrainingRow {
-  std::array<int8_t, gomoku::kActionSize> state{};
-  std::array<float, gomoku::kActionSize> policy{};
+  Quoridor::State state{};
+  std::array<float, Quoridor::ACTION_SIZE> policy{};
   float value = 0.0f;
 };
 
@@ -29,6 +31,7 @@ struct SelfplayStats {
   uint32_t lose = 0;
   std::vector<std::vector<float>> average_depth_lists;
   std::vector<std::vector<float>> max_depth_lists;
+
   std::vector<gomoku::Board> final_states;
 };
 
@@ -47,12 +50,8 @@ struct SelfplayResult {
   SearchProfile profile;
 };
 
-SelfplayResult run_selfplay_games(
-    OnnxInfer& infer,
-    const SearchParams& params,
-    int num_games,
-    int num_threads,
-    uint64_t seed);
+SelfplayResult run_selfplay_games(OnnxInfer& infer, const SearchParams& params, int num_games, int num_threads,
+                                  uint64_t seed);
 
 void write_memory_file(const std::string& path, const std::vector<TrainingRow>& rows);
 void write_stats_file(const std::string& path, const SelfplayStats& stats);
