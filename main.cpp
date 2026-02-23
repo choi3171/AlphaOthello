@@ -21,6 +21,8 @@ struct CliArgs {
   int searches = 64;
   float cpuct = 2.0f;
   float temp = 1.0f;
+  float temp_early = -1.0f;
+  float temp_halflife = 19.0f;
   int threads = -1;
   int nn_server_threads = 1;
   int nn_max_batch_size = 64;
@@ -36,6 +38,7 @@ void print_usage() {
   std::cout
       << "Usage: ./cpp_selfplay --onnx <model.onnx> --out <memory.bin> --games <N>"
       << " --searches <M> --cpuct <C> --temp <T> --threads <K> --seed <S>"
+      << " [--temp-early <T0>] [--temp-halflife <H>]"
       << " --dirichlet-epsilon <E> --dirichlet-alpha <A>"
       << " [--parallel-games <N>]"
       << " [--nn-server-threads <N>] [--nn-max-batch-size <N>]"
@@ -78,6 +81,10 @@ CliArgs parse_args(int argc, char** argv) {
       args.cpuct = std::stof(next("--cpuct"));
     } else if (key == "--temp") {
       args.temp = std::stof(next("--temp"));
+    } else if (key == "--temp-early") {
+      args.temp_early = std::stof(next("--temp-early"));
+    } else if (key == "--temp-halflife") {
+      args.temp_halflife = std::stof(next("--temp-halflife"));
     } else if (key == "--threads") {
       args.threads = std::stoi(next("--threads"));
     } else if (key == "--nn-server-threads") {
@@ -119,6 +126,12 @@ CliArgs parse_args(int argc, char** argv) {
   if (args.parallel_games <= 0) {
     args.parallel_games = 1;
   }
+  if (args.temp_early < 0.0f) {
+    args.temp_early = args.temp;
+  }
+  if (args.temp_halflife <= 0.0f) {
+    args.temp_halflife = 1.0f;
+  }
   return args;
 }
 
@@ -136,6 +149,8 @@ int main(int argc, char** argv) {
     params.num_searches = cli.searches;
     params.cpuct = cli.cpuct;
     params.temperature = cli.temp;
+    params.temperature_early = cli.temp_early;
+    params.temperature_halflife = cli.temp_halflife;
     params.dirichlet_epsilon = cli.dirichlet_epsilon;
     params.dirichlet_alpha = cli.dirichlet_alpha;
     params.parallel_games = cli.parallel_games;

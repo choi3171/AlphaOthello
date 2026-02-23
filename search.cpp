@@ -511,6 +511,23 @@ int sample_action(
   return valid_moves[dist(rng)];
 }
 
+float scheduled_temperature(const SearchParams& params, int move_number) {
+  const double base = static_cast<double>(params.temperature);
+  const double early = static_cast<double>(params.temperature_early);
+  const double halflife = static_cast<double>(params.temperature_halflife);
+  if (halflife <= 1e-9) {
+    return static_cast<float>(std::max(0.0, base));
+  }
+
+  const int clamped_move = std::max(0, move_number);
+  const double board_area = static_cast<double>(gomoku::kActionSize);
+  const double board_scale = 19.0 / std::sqrt(board_area);
+  const double halflives =
+      (static_cast<double>(clamped_move) / halflife) * board_scale;
+  const double scheduled = base + (early - base) * std::pow(0.5, halflives);
+  return static_cast<float>(std::max(0.0, scheduled));
+}
+
 struct HistStep {
   gomoku::Board canonical{};
   std::array<float, gomoku::kActionSize> policy{};
@@ -582,7 +599,8 @@ GameResult play_one_game(
     average_depth.push_back(this_avg_depth);
     max_depth.push_back(this_max_depth);
     const std::vector<int> valid = gomoku::valid_moves(board);
-    const int action = sample_action(probs, valid, params.temperature, rng);
+    const float move_temp = scheduled_temperature(params, static_cast<int>(hist.size()));
+    const int action = sample_action(probs, valid, move_temp, rng);
 
     HistStep step;
     step.canonical = canonical;
@@ -711,8 +729,10 @@ SelfplayResult run_selfplay_games(
           game.hist.push_back(step);
 
           const std::vector<int> valid = gomoku::valid_moves(game.board);
+          const float move_temp =
+              scheduled_temperature(params, static_cast<int>(game.hist.size()) - 1);
           const int action = sample_action(
-              all_action_probs[static_cast<size_t>(i)], valid, params.temperature, rng);
+              all_action_probs[static_cast<size_t>(i)], valid, move_temp, rng);
 
           gomoku::apply_move(game.board, action, game.player);
           const bool win = gomoku::check_win(game.board, action, game.player);

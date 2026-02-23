@@ -12,6 +12,8 @@ struct SearchParams {
   int num_searches = 64;
   float cpuct = 2.0f;
   float temperature = 1.0f;
+  float temperature_early = 1.0f;
+  float temperature_halflife = 19.0f;
   float dirichlet_epsilon = 0.25f;
   float dirichlet_alpha = 0.3f;
   int parallel_games = 1;
