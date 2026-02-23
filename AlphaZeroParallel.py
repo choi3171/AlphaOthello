@@ -1,5 +1,6 @@
 import os
 import random
+import re
 import struct
 import subprocess
 import time
@@ -66,8 +67,7 @@ class AlphaZeroParallel:
 
     def _run_cpp_selfplay(self, onnx_path, memory_path, stats_path, iteration):
         cpp_bin = self.args.get("cpp_selfplay_path", "./cpp_selfplay")
-        threads = self.args.get("cpp_threads", max(1, (os.cpu_count() or 2) - 2))
-        nn_server_threads = int(self.args.get("cpp_nn_server_threads", 1))
+        threads = int(self.args.get("cpp_threads", 0))
         nn_max_batch_size = int(self.args.get("cpp_nn_max_batch_size", 64))
         use_cuda = bool(self.args.get("cpp_use_cuda", torch.cuda.is_available()))
         cuda_device_id = int(self.args.get("cpp_cuda_device_id", 0))
@@ -107,8 +107,6 @@ class AlphaZeroParallel:
             str(temp_halflife),
             "--threads",
             str(threads),
-            "--nn-server-threads",
-            str(nn_server_threads),
             "--nn-max-batch-size",
             str(nn_max_batch_size),
             "--seed",
@@ -207,6 +205,32 @@ class AlphaZeroParallel:
             loaded.append((i, len(chunk)))
 
         return merged_memory, loaded
+
+    def _cleanup_stale_memory_bins(self, iteration):
+        replay_memory_iters = max(0, int(self.args.get("replay_memory_iters", 0)))
+        start_iter = max(0, iteration - replay_memory_iters)
+        mem_dir = "./tmp_cpp_selfplay"
+        removed = []
+
+        if not os.path.isdir(mem_dir):
+            return removed
+
+        pattern = re.compile(r"^memory_(\d+)\.bin$")
+        for name in os.listdir(mem_dir):
+            match = pattern.match(name)
+            if match is None:
+                continue
+            idx = int(match.group(1))
+            if idx >= start_iter:
+                continue
+            path = os.path.join(mem_dir, name)
+            try:
+                os.remove(path)
+                removed.append(idx)
+            except OSError:
+                # Ignore cleanup failures; training can continue with extra files.
+                pass
+        return sorted(removed)
 
     def _load_stats_bin(self, stats_path):
         def read_u32(f):
@@ -324,6 +348,7 @@ class AlphaZeroParallel:
                 raise RuntimeError("C++ selfplay returned empty memory")
             if len(memory) == 0:
                 raise RuntimeError("Replay memory is empty")
+            removed_stale = self._cleanup_stale_memory_bins(iteration)
 
             t0 = time.perf_counter()
             stats = self._load_stats_bin(stats_path)
@@ -351,7 +376,15 @@ class AlphaZeroParallel:
                 self.log_list(f"max_depth/{iteration}", self.calculate_average(self.history["max_depth"]))
 
                 max_image_count = self.args.get("max_final_state_logs", 16)
-                for i, board in enumerate(stats["final_states"][:max_image_count]):
+                final_states = stats["final_states"]
+                sample_count = min(max_image_count, len(final_states))
+                if sample_count < len(final_states):
+                    log_seed = int(self.args.get("seed", 0)) + 1000003 * iteration + 17
+                    selected = random.Random(log_seed).sample(range(len(final_states)), sample_count)
+                else:
+                    selected = list(range(sample_count))
+                for i, board_idx in enumerate(selected):
+                    board = final_states[board_idx]
                     self.log_image(
                         f"final_state/{iteration}", self.game.get_visualized_state(board), i
                     )
@@ -394,6 +427,8 @@ class AlphaZeroParallel:
             if loaded_replay:
                 replay_desc = ",".join(f"{idx}:{cnt}" for idx, cnt in loaded_replay)
                 print(f"[profile][iter {iteration}] replay_memory_iters={self.args.get('replay_memory_iters', 0)} loaded={replay_desc}")
+            if removed_stale:
+                print(f"[profile][iter {iteration}] removed_stale_memory_bins={removed_stale}")
             print(
                 f"[profile][iter {iteration}] "
                 f"train_epoch_sec min/avg/max="

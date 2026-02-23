@@ -29,7 +29,6 @@ class OnnxInfer {
       const std::string& model_path,
       bool use_cuda,
       int cuda_device_id,
-      int num_server_threads,
       int max_batch_size);
   ~OnnxInfer();
 

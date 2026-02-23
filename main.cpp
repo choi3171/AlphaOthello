@@ -24,7 +24,6 @@ struct CliArgs {
   float temp_early = -1.0f;
   float temp_halflife = 19.0f;
   int threads = -1;
-  int nn_server_threads = 1;
   int nn_max_batch_size = 64;
   int parallel_games = 1;
   bool use_cuda = false;
@@ -41,7 +40,7 @@ void print_usage() {
       << " [--temp-early <T0>] [--temp-halflife <H>]"
       << " --dirichlet-epsilon <E> --dirichlet-alpha <A>"
       << " [--parallel-games <N>]"
-      << " [--nn-server-threads <N>] [--nn-max-batch-size <N>]"
+      << " [--nn-max-batch-size <N>]"
       << " [--use-cuda] [--cuda-device-id <ID>]"
       << " [--stats-out <stats.bin>]\n";
 }
@@ -51,8 +50,7 @@ int default_threads() {
   if (hw == 0) {
     return 1;
   }
-  const int t = static_cast<int>(hw) - 2;
-  return t > 0 ? t : 1;
+  return static_cast<int>(hw);
 }
 
 CliArgs parse_args(int argc, char** argv) {
@@ -87,8 +85,6 @@ CliArgs parse_args(int argc, char** argv) {
       args.temp_halflife = std::stof(next("--temp-halflife"));
     } else if (key == "--threads") {
       args.threads = std::stoi(next("--threads"));
-    } else if (key == "--nn-server-threads") {
-      args.nn_server_threads = std::stoi(next("--nn-server-threads"));
     } else if (key == "--nn-max-batch-size") {
       args.nn_max_batch_size = std::stoi(next("--nn-max-batch-size"));
     } else if (key == "--parallel-games") {
@@ -116,9 +112,6 @@ CliArgs parse_args(int argc, char** argv) {
   }
   if (args.threads <= 0) {
     args.threads = default_threads();
-  }
-  if (args.nn_server_threads <= 0) {
-    args.nn_server_threads = 1;
   }
   if (args.nn_max_batch_size <= 0) {
     args.nn_max_batch_size = 1;
@@ -161,7 +154,6 @@ int main(int argc, char** argv) {
         cli.onnx_path,
         cli.use_cuda,
         cli.cuda_device_id,
-        cli.nn_server_threads,
         cli.nn_max_batch_size);
     const auto infer_init_end = std::chrono::steady_clock::now();
 
