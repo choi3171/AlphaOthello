@@ -1,12 +1,11 @@
 #pragma once
 
-#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
 
+#include "game.h"
 #include "onnx_infer.h"
-#include "quoridor.h"
 
 struct SearchParams {
   int num_searches = 64;
@@ -20,8 +19,8 @@ struct SearchParams {
 };
 
 struct TrainingRow {
-  Quoridor::State state{};
-  std::array<float, Quoridor::ACTION_SIZE> policy{};
+  std::vector<float> encoded_state;
+  std::vector<float> policy;
   float value = 0.0f;
 };
 
@@ -31,8 +30,7 @@ struct SelfplayStats {
   uint32_t lose = 0;
   std::vector<std::vector<float>> average_depth_lists;
   std::vector<std::vector<float>> max_depth_lists;
-
-  std::vector<gomoku::Board> final_states;
+  std::vector<std::vector<int8_t>> final_states;
 };
 
 struct SearchProfile {
@@ -50,8 +48,21 @@ struct SelfplayResult {
   SearchProfile profile;
 };
 
-SelfplayResult run_selfplay_games(OnnxInfer& infer, const SearchParams& params, int num_games, int num_threads,
-                                  uint64_t seed);
+SelfplayResult run_selfplay_games(
+    OnnxInfer& infer,
+    const game::Config& game_cfg,
+    const SearchParams& params,
+    int num_games,
+    int num_threads,
+    uint64_t seed);
 
-void write_memory_file(const std::string& path, const std::vector<TrainingRow>& rows);
-void write_stats_file(const std::string& path, const SelfplayStats& stats);
+void write_memory_file(
+    const std::string& path,
+    const std::vector<TrainingRow>& rows,
+    const game::Config& game_cfg);
+
+void write_stats_file(
+    const std::string& path,
+    const SelfplayStats& stats,
+    const game::Config& game_cfg);
+

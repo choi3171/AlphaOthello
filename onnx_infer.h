@@ -2,13 +2,12 @@
 
 #include <onnxruntime_cxx_api.h>
 
-#include <array>
 #include <atomic>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "quoridor.h"
+#include "game.h"
 
 class OnnxInfer {
  public:
@@ -25,19 +24,27 @@ class OnnxInfer {
     uint64_t worker_postprocess_ns = 0;
   };
 
-  OnnxInfer(const std::string& model_path, bool use_cuda, int cuda_device_id, int num_server_threads,
-            int max_batch_size);
+  OnnxInfer(
+      const game::Config& game_cfg,
+      const std::string& model_path,
+      bool use_cuda,
+      int cuda_device_id,
+      int max_batch_size);
   ~OnnxInfer();
 
-  std::pair<std::array<float, gomoku::kActionSize>, float> infer(const gomoku::Board& canonical_state);
-  std::vector<std::pair<std::array<float, gomoku::kActionSize>, float>> infer_batch(
-      const std::vector<gomoku::Board>& canonical_states);
+  std::pair<std::vector<float>, float> infer(const game::State& canonical_state);
+  std::vector<std::pair<std::vector<float>, float>> infer_batch(
+      const std::vector<game::State>& canonical_states);
   InferProfile profile_snapshot() const;
 
  private:
-  void run_batch_direct(const std::vector<gomoku::Board>& canonical_states, size_t begin, size_t count,
-                        std::vector<std::pair<std::array<float, gomoku::kActionSize>, float>>& outputs);
+  void run_batch_direct(
+      const std::vector<game::State>& canonical_states,
+      size_t begin,
+      size_t count,
+      std::vector<std::pair<std::vector<float>, float>>& outputs);
 
+  game::Config game_cfg_;
   Ort::Env env_;
   Ort::SessionOptions session_options_;
   Ort::Session session_;
@@ -61,3 +68,4 @@ class OnnxInfer {
   std::atomic<uint64_t> worker_writeback_ns_{0};
   std::atomic<uint64_t> worker_postprocess_ns_{0};
 };
+

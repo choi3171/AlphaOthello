@@ -6,12 +6,11 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+file(GLOB CPP_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
+
 add_executable(
   cpp_selfplay
-  main.cpp
-  search.cpp
-  quoridor.cpp
-  onnx_infer.cpp
+  ${CPP_SOURCES}
 )
 
 target_compile_options(cpp_selfplay PRIVATE -O3 -march=native -ffast-math -flto)

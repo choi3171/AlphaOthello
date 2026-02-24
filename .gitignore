@@ -232,4 +232,7 @@ logs/
 # Ignore Build File
 cpp_selfplay
 
+# Ignore WSL Build Files
+build_wsl/
+
 # End of https://www.toptal.com/developers/gitignore/api/windows,jupyternotebooks,python

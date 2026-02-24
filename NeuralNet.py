@@ -5,12 +5,12 @@ import torch.nn.functional as F
 torch.manual_seed(0)
 
 class ResNet(nn.Module):
-    def __init__(self, game, num_resBlocks, num_hidden, device):
+    def __init__(self, game, num_resBlocks, num_hidden, device, input_channels=3):
         super().__init__()
         
         self.device = device
         self.startBlock = nn.Sequential(
-            nn.Conv2d(3, num_hidden, kernel_size=3, padding=1),
+            nn.Conv2d(input_channels, num_hidden, kernel_size=3, padding=1),
             nn.BatchNorm2d(num_hidden),
             nn.ReLU()
         )
@@ -96,13 +96,13 @@ class TransformerBlock(nn.Module):
         return out
         
 class ResTNet(nn.Module):
-    def __init__(self, game, num_hidden, device, block_types='RRTRRT', num_heads=4, dropout=0.1):
+    def __init__(self, game, num_hidden, device, block_types='RRTRRT', num_heads=4, dropout=0.1, input_channels=3):
         super().__init__()
 
         self.device = device
 
         self.startBlock = nn.Sequential(
-            nn.Conv2d(3, num_hidden, kernel_size=3, padding=1),
+            nn.Conv2d(input_channels, num_hidden, kernel_size=3, padding=1),
             nn.BatchNorm2d(num_hidden),
             nn.ReLU()
         )
@@ -186,13 +186,13 @@ class PoolFormerBlock(nn.Module):
         return x
 
 class AlphaZeroPoolFormer(nn.Module):
-    def __init__(self, game, num_blocks, dim, device):
+    def __init__(self, game, num_blocks, dim, device, input_channels=3):
         super().__init__()
         self.device = device
         
         # Patch Embedding
         self.stem = nn.Sequential(
-            nn.Conv2d(3, dim, kernel_size=3, padding=1),
+            nn.Conv2d(input_channels, dim, kernel_size=3, padding=1),
             nn.BatchNorm2d(dim),
             nn.ReLU()
         )

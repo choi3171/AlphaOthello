@@ -3,6 +3,7 @@
 namespace gomoku {
 
 namespace {
+
 inline int row_of(int action) { return action / kBoardSize; }
 inline int col_of(int action) { return action % kBoardSize; }
 
@@ -11,7 +12,8 @@ int count_dir(const Board& board, int r, int c, int dr, int dc, int8_t player) {
 
   int nr = r + dr;
   int nc = c + dc;
-  while (nr >= 0 && nr < kBoardSize && nc >= 0 && nc < kBoardSize && board[nr * kBoardSize + nc] == player) {
+  while (nr >= 0 && nr < kBoardSize && nc >= 0 && nc < kBoardSize &&
+         board[static_cast<size_t>(nr * kBoardSize + nc)] == player) {
     count++;
     nr += dr;
     nc += dc;
@@ -19,7 +21,8 @@ int count_dir(const Board& board, int r, int c, int dr, int dc, int8_t player) {
 
   nr = r - dr;
   nc = c - dc;
-  while (nr >= 0 && nr < kBoardSize && nc >= 0 && nc < kBoardSize && board[nr * kBoardSize + nc] == player) {
+  while (nr >= 0 && nr < kBoardSize && nc >= 0 && nc < kBoardSize &&
+         board[static_cast<size_t>(nr * kBoardSize + nc)] == player) {
     count++;
     nr -= dr;
     nc -= dc;
@@ -27,6 +30,7 @@ int count_dir(const Board& board, int r, int c, int dr, int dc, int8_t player) {
 
   return count;
 }
+
 }  // namespace
 
 Board initial_board() {
@@ -38,7 +42,7 @@ Board initial_board() {
 Board canonical_board(const Board& board, int8_t player) {
   Board out{};
   for (int i = 0; i < kActionSize; i++) {
-    out[i] = static_cast<int8_t>(board[i] * player);
+    out[static_cast<size_t>(i)] = static_cast<int8_t>(board[static_cast<size_t>(i)] * player);
   }
   return out;
 }
@@ -46,26 +50,30 @@ Board canonical_board(const Board& board, int8_t player) {
 Board flipped_perspective(const Board& board) {
   Board out{};
   for (int i = 0; i < kActionSize; i++) {
-    out[i] = static_cast<int8_t>(-board[i]);
+    out[static_cast<size_t>(i)] = static_cast<int8_t>(-board[static_cast<size_t>(i)]);
   }
   return out;
 }
 
-MoveList valid_moves(const Board& board) {
-  static thread_local int moves_buffer[kActionSize];
+int get_valid_moves(const Board& board, int* moves_out) {
   int count = 0;
-
   for (int a = 0; a < kActionSize; a++) {
-    if (board[a] == 0) {
-      moves_buffer[count++] = a;
+    if (board[static_cast<size_t>(a)] == 0) {
+      moves_out[count++] = a;
     }
   }
-  return {moves_buffer, count};
+  return count;
+}
+
+MoveList valid_moves(const Board& board) {
+  static thread_local int scratch[kActionSize];
+  const int count = get_valid_moves(board, scratch);
+  return {scratch, count};
 }
 
 bool is_full(const Board& board) {
   for (int i = 0; i < kActionSize; i++) {
-    if (board[i] == 0) {
+    if (board[static_cast<size_t>(i)] == 0) {
       return false;
     }
   }
@@ -76,10 +84,10 @@ bool apply_move(Board& board, int action, int8_t player) {
   if (action < 0 || action >= kActionSize) {
     return false;
   }
-  if (board[action] != 0) {
+  if (board[static_cast<size_t>(action)] != 0) {
     return false;
   }
-  board[action] = player;
+  board[static_cast<size_t>(action)] = player;
   return true;
 }
 
@@ -87,14 +95,32 @@ bool check_win(const Board& board, int action, int8_t player) {
   if (action < 0 || action >= kActionSize) {
     return false;
   }
-  if (board[action] != player) {
+  if (board[static_cast<size_t>(action)] != player) {
     return false;
   }
-
   const int r = row_of(action);
   const int c = col_of(action);
-  return count_dir(board, r, c, 1, 0, player) >= 5 || count_dir(board, r, c, 0, 1, player) >= 5 ||
-         count_dir(board, r, c, 1, 1, player) >= 5 || count_dir(board, r, c, 1, -1, player) >= 5;
+  return count_dir(board, r, c, 1, 0, player) >= 5 ||
+         count_dir(board, r, c, 0, 1, player) >= 5 ||
+         count_dir(board, r, c, 1, 1, player) >= 5 ||
+         count_dir(board, r, c, 1, -1, player) >= 5;
 }
 
+void encode_state(const Board& board, std::vector<float>& out_encoded) {
+  out_encoded.assign(static_cast<size_t>(encoded_state_size()), 0.0f);
+  for (int i = 0; i < kActionSize; i++) {
+    const int8_t v = board[static_cast<size_t>(i)];
+    out_encoded[static_cast<size_t>(i)] = (v == -1) ? 1.0f : 0.0f;
+    out_encoded[static_cast<size_t>(kActionSize + i)] = (v == 0) ? 1.0f : 0.0f;
+    out_encoded[static_cast<size_t>(2 * kActionSize + i)] = (v == 1) ? 1.0f : 0.0f;
+  }
+}
+
+void to_board_plane(const Board& board, std::vector<int8_t>& out_plane) {
+  out_plane.assign(board.begin(), board.end());
+}
+
+int encoded_state_size() { return kInputChannels * kActionSize; }
+
 }  // namespace gomoku
+

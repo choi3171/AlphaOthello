@@ -3,51 +3,66 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstring>
 #include <iostream>
+#include <memory>
 #include <stdexcept>
 
 namespace {
-std::array<float, gomoku::kActionSize> softmax_logits(const float* logits) {
-  std::array<float, gomoku::kActionSize> probs{};
+
+std::vector<float> softmax_logits(const float* logits, int len) {
+  std::vector<float> probs(static_cast<size_t>(len), 0.0f);
+  if (len <= 0) {
+    return probs;
+  }
   float max_logit = logits[0];
-  for (int i = 1; i < gomoku::kActionSize; i++) {
+  for (int i = 1; i < len; i++) {
     max_logit = std::max(max_logit, logits[i]);
   }
 
   double sum = 0.0;
-  for (int i = 0; i < gomoku::kActionSize; i++) {
-    probs[i] = static_cast<float>(std::exp(static_cast<double>(logits[i] - max_logit)));
-    sum += probs[i];
+  for (int i = 0; i < len; i++) {
+    probs[static_cast<size_t>(i)] =
+        static_cast<float>(std::exp(static_cast<double>(logits[i] - max_logit)));
+    sum += probs[static_cast<size_t>(i)];
   }
+
   if (sum <= 0.0) {
-    probs.fill(1.0f / static_cast<float>(gomoku::kActionSize));
+    const float uniform = 1.0f / static_cast<float>(len);
+    std::fill(probs.begin(), probs.end(), uniform);
     return probs;
   }
-  for (int i = 0; i < gomoku::kActionSize; i++) {
-    probs[i] = static_cast<float>(probs[i] / sum);
+  for (int i = 0; i < len; i++) {
+    probs[static_cast<size_t>(i)] =
+        static_cast<float>(probs[static_cast<size_t>(i)] / sum);
   }
   return probs;
 }
+
 }  // namespace
 
 OnnxInfer::OnnxInfer(
+    const game::Config& game_cfg,
     const std::string& model_path,
     bool use_cuda,
     int cuda_device_id,
     int max_batch_size)
-    : env_(ORT_LOGGING_LEVEL_WARNING, "cpp_selfplay"),
+    : game_cfg_(game_cfg),
+      env_(ORT_LOGGING_LEVEL_WARNING, "cpp_selfplay"),
       session_options_(),
       session_(nullptr),
-      cpu_memory_info_(Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault)),
+      cpu_memory_info_(
+          Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault)),
       max_batch_size_(std::max(1, max_batch_size)) {
-  session_options_.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+  session_options_.SetGraphOptimizationLevel(
+      GraphOptimizationLevel::ORT_ENABLE_ALL);
 
   if (use_cuda) {
     try {
       OrtCUDAProviderOptionsV2* cuda_options = nullptr;
       Ort::ThrowOnError(Ort::GetApi().CreateCUDAProviderOptions(&cuda_options));
-      std::unique_ptr<OrtCUDAProviderOptionsV2, void (*)(OrtCUDAProviderOptionsV2*)> holder(
-          cuda_options, [](OrtCUDAProviderOptionsV2* p) {
+      std::unique_ptr<OrtCUDAProviderOptionsV2, void (*)(OrtCUDAProviderOptionsV2*)>
+          holder(cuda_options, [](OrtCUDAProviderOptionsV2* p) {
             if (p != nullptr) {
               Ort::GetApi().ReleaseCUDAProviderOptions(p);
             }
@@ -55,14 +70,17 @@ OnnxInfer::OnnxInfer(
       const char* keys[] = {"device_id"};
       const std::string device_id_str = std::to_string(cuda_device_id);
       const char* values[] = {device_id_str.c_str()};
-      Ort::ThrowOnError(Ort::GetApi().UpdateCUDAProviderOptions(
-          cuda_options, keys, values, 1));
-      Ort::ThrowOnError(Ort::GetApi().SessionOptionsAppendExecutionProvider_CUDA_V2(
-          session_options_, cuda_options));
-      std::cout << "OnnxInfer: CUDA provider enabled (device_id=" << cuda_device_id << ")\n";
+      Ort::ThrowOnError(
+          Ort::GetApi().UpdateCUDAProviderOptions(cuda_options, keys, values, 1));
+      Ort::ThrowOnError(
+          Ort::GetApi().SessionOptionsAppendExecutionProvider_CUDA_V2(
+              session_options_, cuda_options));
+      std::cout << "OnnxInfer: CUDA provider enabled (device_id=" << cuda_device_id
+                << ")\n";
     } catch (const std::exception& e) {
-      std::cerr << "OnnxInfer: failed to enable CUDA provider, fallback to CPU: " << e.what()
-                << "\n";
+      std::cerr
+          << "OnnxInfer: failed to enable CUDA provider, fallback to CPU: "
+          << e.what() << "\n";
     }
   }
 
@@ -72,11 +90,24 @@ OnnxInfer::OnnxInfer(
     Ort::TypeInfo input_type_info = session_.GetInputTypeInfo(0);
     auto tensor_info = input_type_info.GetTensorTypeAndShapeInfo();
     std::vector<int64_t> shape = tensor_info.GetShape();
+    if (shape.size() != 4) {
+      throw std::runtime_error("ONNX input must be rank-4 [N,C,H,W]");
+    }
+    if (shape[1] > 0 && shape[1] != game_cfg_.input_channels) {
+      throw std::runtime_error("ONNX channel mismatch with selected game");
+    }
+    if (shape[2] > 0 && shape[2] != game_cfg_.board_size) {
+      throw std::runtime_error("ONNX height mismatch with selected game");
+    }
+    if (shape[3] > 0 && shape[3] != game_cfg_.board_size) {
+      throw std::runtime_error("ONNX width mismatch with selected game");
+    }
     if (!shape.empty() && shape[0] > 0) {
       fixed_batch_size_ = shape[0];
       if (fixed_batch_size_ == 1 && max_batch_size_ > 1) {
         max_batch_size_ = 1;
-        std::cout << "OnnxInfer: fixed batch=1 model detected, forcing nn max batch size to 1\n";
+        std::cout
+            << "OnnxInfer: fixed batch=1 model detected, forcing nn max batch size to 1\n";
       }
     }
   }
@@ -93,8 +124,10 @@ OnnxInfer::OnnxInfer(
   const size_t input_count = session_.GetInputCount();
   const size_t output_count = session_.GetOutputCount();
   if (input_count < 1 || output_count < 2) {
-    throw std::runtime_error("ONNX model must have 1 input and at least 2 outputs (policy, value)");
+    throw std::runtime_error(
+        "ONNX model must have 1 input and at least 2 outputs (policy, value)");
   }
+
   input_names_holder_.reserve(input_count);
   output_names_holder_.reserve(output_count);
   input_names_.reserve(input_count);
@@ -119,25 +152,31 @@ OnnxInfer::OnnxInfer(
 OnnxInfer::~OnnxInfer() = default;
 
 void OnnxInfer::run_batch_direct(
-    const std::vector<gomoku::Board>& canonical_states,
+    const std::vector<game::State>& canonical_states,
     size_t begin,
     size_t count,
-    std::vector<std::pair<std::array<float, gomoku::kActionSize>, float>>& outputs) {
+    std::vector<std::pair<std::vector<float>, float>>& outputs) {
   const int batch_size = static_cast<int>(count);
   if (batch_size <= 0) {
     return;
   }
 
   worker_batch_count_.fetch_add(1, std::memory_order_relaxed);
-  worker_item_count_.fetch_add(static_cast<uint64_t>(count), std::memory_order_relaxed);
+  worker_item_count_.fetch_add(static_cast<uint64_t>(count),
+                               std::memory_order_relaxed);
 
   try {
     thread_local std::vector<float> input_data;
     thread_local std::vector<float> policy_output_data;
     thread_local std::vector<float> value_output_data;
+    thread_local std::vector<float> encoded_state;
 
-    const size_t input_elem_count = static_cast<size_t>(batch_size) * 3 * gomoku::kActionSize;
-    const size_t policy_elem_count = static_cast<size_t>(batch_size) * gomoku::kActionSize;
+    const int encoded_size = game::encoded_state_size(game_cfg_);
+    const size_t input_elem_count =
+        static_cast<size_t>(batch_size) * static_cast<size_t>(encoded_size);
+    const size_t policy_elem_count =
+        static_cast<size_t>(batch_size) *
+        static_cast<size_t>(game_cfg_.action_size);
 
     std::vector<int64_t> value_output_shape = value_output_shape_template_;
     value_output_shape[0] = batch_size;
@@ -157,16 +196,15 @@ void OnnxInfer::run_batch_direct(
     const auto input_build_start = std::chrono::steady_clock::now();
     input_data.assign(input_elem_count, 0.0f);
     for (int b = 0; b < batch_size; b++) {
-      const auto& s = canonical_states[begin + static_cast<size_t>(b)];
-      for (int i = 0; i < gomoku::kActionSize; i++) {
-        const int8_t v = s[i];
-        input_data[static_cast<size_t>(b) * 3 * gomoku::kActionSize + i] =
-            (v == -1) ? 1.0f : 0.0f;
-        input_data[static_cast<size_t>(b) * 3 * gomoku::kActionSize + gomoku::kActionSize + i] =
-            (v == 0) ? 1.0f : 0.0f;
-        input_data[static_cast<size_t>(b) * 3 * gomoku::kActionSize + 2 * gomoku::kActionSize + i] =
-            (v == 1) ? 1.0f : 0.0f;
+      game::encode_state(
+          game_cfg_, canonical_states[begin + static_cast<size_t>(b)], encoded_state);
+      if (static_cast<int>(encoded_state.size()) != encoded_size) {
+        throw std::runtime_error("encode_state returned unexpected size");
       }
+      std::memcpy(
+          input_data.data() + static_cast<size_t>(b) * static_cast<size_t>(encoded_size),
+          encoded_state.data(),
+          static_cast<size_t>(encoded_size) * sizeof(float));
     }
     const auto input_build_end = std::chrono::steady_clock::now();
     worker_input_build_ns_.fetch_add(
@@ -179,22 +217,18 @@ void OnnxInfer::run_batch_direct(
     policy_output_data.resize(policy_elem_count);
     value_output_data.resize(value_elem_count);
 
-    std::array<int64_t, 4> input_shape = {batch_size, 3, gomoku::kBoardSize, gomoku::kBoardSize};
-    std::array<int64_t, 2> policy_shape = {batch_size, gomoku::kActionSize};
+    std::array<int64_t, 4> input_shape = {
+        batch_size, game_cfg_.input_channels, game_cfg_.board_size, game_cfg_.board_size};
+    std::array<int64_t, 2> policy_shape = {batch_size, game_cfg_.action_size};
     Ort::Value input_tensor = Ort::Value::CreateTensor<float>(
-        cpu_memory_info_, input_data.data(), input_data.size(), input_shape.data(), input_shape.size());
+        cpu_memory_info_, input_data.data(), input_data.size(), input_shape.data(),
+        input_shape.size());
     Ort::Value policy_output_tensor = Ort::Value::CreateTensor<float>(
-        cpu_memory_info_,
-        policy_output_data.data(),
-        policy_output_data.size(),
-        policy_shape.data(),
-        policy_shape.size());
+        cpu_memory_info_, policy_output_data.data(), policy_output_data.size(),
+        policy_shape.data(), policy_shape.size());
     Ort::Value value_output_tensor = Ort::Value::CreateTensor<float>(
-        cpu_memory_info_,
-        value_output_data.data(),
-        value_output_data.size(),
-        value_output_shape.data(),
-        value_output_shape.size());
+        cpu_memory_info_, value_output_data.data(), value_output_data.size(),
+        value_output_shape.data(), value_output_shape.size());
 
     const auto bind_start = std::chrono::steady_clock::now();
     Ort::IoBinding binding(session_);
@@ -203,17 +237,18 @@ void OnnxInfer::run_batch_direct(
     binding.BindOutput(output_names_[1], value_output_tensor);
     const auto bind_end = std::chrono::steady_clock::now();
     worker_bind_io_ns_.fetch_add(
-        static_cast<uint64_t>(
-            std::chrono::duration_cast<std::chrono::nanoseconds>(bind_end - bind_start).count()),
+        static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                  bind_end - bind_start)
+                                  .count()),
         std::memory_order_relaxed);
 
     const auto ort_run_start = std::chrono::steady_clock::now();
     session_.Run(Ort::RunOptions{nullptr}, binding);
     const auto ort_run_end = std::chrono::steady_clock::now();
     worker_ort_run_ns_.fetch_add(
-        static_cast<uint64_t>(
-            std::chrono::duration_cast<std::chrono::nanoseconds>(ort_run_end - ort_run_start)
-                .count()),
+        static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                  ort_run_end - ort_run_start)
+                                  .count()),
         std::memory_order_relaxed);
 
     const auto output_fetch_start = std::chrono::steady_clock::now();
@@ -228,62 +263,73 @@ void OnnxInfer::run_batch_direct(
         std::memory_order_relaxed);
 
     const auto post_start = std::chrono::steady_clock::now();
-    const size_t value_stride = std::max<size_t>(1, value_elem_count / static_cast<size_t>(batch_size));
+    const size_t value_stride =
+        std::max<size_t>(1, value_elem_count / static_cast<size_t>(batch_size));
     for (int b = 0; b < batch_size; b++) {
-      const float* row_logits = policy_logits + static_cast<size_t>(b) * gomoku::kActionSize;
+      const float* row_logits =
+          policy_logits +
+          static_cast<size_t>(b) * static_cast<size_t>(game_cfg_.action_size);
       const auto softmax_start = std::chrono::steady_clock::now();
-      const auto probs = softmax_logits(row_logits);
+      std::vector<float> probs = softmax_logits(row_logits, game_cfg_.action_size);
       const auto softmax_end = std::chrono::steady_clock::now();
       worker_softmax_ns_.fetch_add(
           static_cast<uint64_t>(
-              std::chrono::duration_cast<std::chrono::nanoseconds>(softmax_end - softmax_start)
+              std::chrono::duration_cast<std::chrono::nanoseconds>(
+                  softmax_end - softmax_start)
                   .count()),
           std::memory_order_relaxed);
 
       const auto write_start = std::chrono::steady_clock::now();
-      outputs[begin + static_cast<size_t>(b)] = {probs, value_ptr[static_cast<size_t>(b) * value_stride]};
+      outputs[begin + static_cast<size_t>(b)] = {
+          std::move(probs), value_ptr[static_cast<size_t>(b) * value_stride]};
       const auto write_end = std::chrono::steady_clock::now();
       worker_writeback_ns_.fetch_add(
           static_cast<uint64_t>(
-              std::chrono::duration_cast<std::chrono::nanoseconds>(write_end - write_start).count()),
+              std::chrono::duration_cast<std::chrono::nanoseconds>(
+                  write_end - write_start)
+                  .count()),
           std::memory_order_relaxed);
     }
     const auto post_end = std::chrono::steady_clock::now();
     worker_postprocess_ns_.fetch_add(
         static_cast<uint64_t>(
-            std::chrono::duration_cast<std::chrono::nanoseconds>(post_end - post_start).count()),
+            std::chrono::duration_cast<std::chrono::nanoseconds>(post_end - post_start)
+                .count()),
         std::memory_order_relaxed);
   } catch (const std::exception& e) {
     std::cerr << "OnnxInfer direct inference failure: " << e.what() << "\n";
+    const std::vector<float> uniform(
+        static_cast<size_t>(game_cfg_.action_size),
+        1.0f / static_cast<float>(game_cfg_.action_size));
     for (size_t i = 0; i < count; i++) {
-      std::array<float, gomoku::kActionSize> uniform{};
-      uniform.fill(1.0f / static_cast<float>(gomoku::kActionSize));
       outputs[begin + i] = {uniform, 0.0f};
     }
   }
 }
 
-std::pair<std::array<float, gomoku::kActionSize>, float> OnnxInfer::infer(
-    const gomoku::Board& canonical_state) {
-  const auto batch_outputs = infer_batch(std::vector<gomoku::Board>{canonical_state});
+std::pair<std::vector<float>, float> OnnxInfer::infer(
+    const game::State& canonical_state) {
+  const auto batch_outputs = infer_batch(std::vector<game::State>{canonical_state});
   return batch_outputs[0];
 }
 
-std::vector<std::pair<std::array<float, gomoku::kActionSize>, float>> OnnxInfer::infer_batch(
-    const std::vector<gomoku::Board>& canonical_states) {
-  std::vector<std::pair<std::array<float, gomoku::kActionSize>, float>> outputs;
+std::vector<std::pair<std::vector<float>, float>> OnnxInfer::infer_batch(
+    const std::vector<game::State>& canonical_states) {
+  std::vector<std::pair<std::vector<float>, float>> outputs;
   if (canonical_states.empty()) {
     return outputs;
   }
   outputs.resize(canonical_states.size());
   size_t begin = 0;
   while (begin < canonical_states.size()) {
-    const size_t count = std::min(static_cast<size_t>(max_batch_size_), canonical_states.size() - begin);
+    const size_t count =
+        std::min(static_cast<size_t>(max_batch_size_),
+                 canonical_states.size() - begin);
     run_batch_direct(canonical_states, begin, count, outputs);
     begin += count;
   }
-  query_count_.fetch_add(
-      static_cast<uint64_t>(canonical_states.size()), std::memory_order_relaxed);
+  query_count_.fetch_add(static_cast<uint64_t>(canonical_states.size()),
+                         std::memory_order_relaxed);
   return outputs;
 }
 
@@ -295,7 +341,8 @@ OnnxInfer::InferProfile OnnxInfer::profile_snapshot() const {
   p.worker_bind_io_ns = worker_bind_io_ns_.load(std::memory_order_relaxed);
   p.worker_input_build_ns = worker_input_build_ns_.load(std::memory_order_relaxed);
   p.worker_ort_run_ns = worker_ort_run_ns_.load(std::memory_order_relaxed);
-  p.worker_ort_output_fetch_ns = worker_ort_output_fetch_ns_.load(std::memory_order_relaxed);
+  p.worker_ort_output_fetch_ns =
+      worker_ort_output_fetch_ns_.load(std::memory_order_relaxed);
   p.worker_softmax_ns = worker_softmax_ns_.load(std::memory_order_relaxed);
   p.worker_writeback_ns = worker_writeback_ns_.load(std::memory_order_relaxed);
   p.worker_postprocess_ns = worker_postprocess_ns_.load(std::memory_order_relaxed);

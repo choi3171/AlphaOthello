@@ -28,7 +28,10 @@ class AlphaZeroParallel:
         self.model.eval()
         original_device = self.model.device
         self.model.to("cpu")
-        dummy = torch.zeros((1, 3, self.game.row_count, self.game.column_count), dtype=torch.float32)
+        dummy = torch.zeros(
+            (1, self.game.input_channels, self.game.row_count, self.game.column_count),
+            dtype=torch.float32,
+        )
         torch.onnx.export(
             self.model,
             dummy,
@@ -80,11 +83,14 @@ class AlphaZeroParallel:
                 "temperature_halflife", self.args.get("chosenMoveTemperatureHalflife", 19.0)
             )
         )
+        game_name = str(self.args.get("game", "gomoku")).lower()
         seed_base = self.args.get("seed", 0)
         seed = int(seed_base + iteration)
 
         cmd = [
             cpp_bin,
+            "--game",
+            game_name,
             "--onnx",
             onnx_path,
             "--out",
@@ -154,7 +160,7 @@ class AlphaZeroParallel:
 
     def _load_memory_bin(self, memory_path):
         memory = []
-        expected_state_bytes = self.game.row_count * self.game.column_count
+        expected_state_bytes = self.game.encoded_state_size * 4
         expected_policy_bytes = self.game.action_size * 4
 
         with open(memory_path, "rb") as f:
@@ -174,13 +180,11 @@ class AlphaZeroParallel:
                 ):
                     raise RuntimeError("Invalid memory file: truncated row")
 
-                state = np.frombuffer(state_bytes, dtype=np.int8).copy().reshape(
-                    self.game.row_count, self.game.column_count
-                )
+                state = np.frombuffer(state_bytes, dtype=np.float32).copy()
                 policy = np.frombuffer(policy_bytes, dtype=np.float32).copy()
                 value = struct.unpack("<f", value_bytes)[0]
 
-                encoded_state = self.game.get_encoded_state(state)
+                encoded_state = self.game.reshape_encoded_state(state)
                 memory.append((encoded_state, policy, value))
         return memory
 

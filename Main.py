@@ -7,7 +7,7 @@ import torch
 
 from AlphaZero import MCTS
 from AlphaZeroParallel import AlphaZeroParallel
-from Game import Gomoku10
+from Game import make_game
 from NeuralNet import ResNet
 from utils import load_config
 
@@ -16,7 +16,7 @@ torch.manual_seed(0)
 
 
 def model_test():
-    game = Gomoku10()
+    game = make_game("gomoku")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     state = game.get_initial_state()
@@ -24,7 +24,7 @@ def model_test():
     encoded_state = game.get_encoded_state(state)
     tensor_state = torch.tensor(encoded_state, device=device).unsqueeze(0)
 
-    model = ResNet(game, 4, 64, device=device)
+    model = ResNet(game, 4, 64, device=device, input_channels=game.input_channels)
     model.eval()
 
     policy, value = model(tensor_state)
@@ -40,24 +40,26 @@ def model_test():
 
 
 def model_learn(config_name):
-    game = Gomoku10()
+    args = load_config(f"./configs/learn/{config_name}.yaml")
+    game_name = args.get("game", "gomoku")
+    game = make_game(game_name)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    model = ResNet(game, 4, 64, device)
+    model = ResNet(game, 4, 64, device, input_channels=game.input_channels)
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=0.0001)
-    args = load_config(f"./configs/learn/{config_name}.yaml")
     args["device"] = str(device)
+    args["game"] = game_name
 
     trainer = AlphaZeroParallel(model, optimizer, game, args, monitor=True)
     trainer.learn()
 
 
 def model_play(version, config_name="play0", human_player=1):
-    game = Gomoku10()
     args = load_config(f"./configs/play/{config_name}.yaml")
+    game = make_game(args.get("game", "gomoku"))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    model = ResNet(game, 4, 64, device)
+    model = ResNet(game, 4, 64, device, input_channels=game.input_channels)
     model_path = f"./saved_model/model_{version}_{game.__repr__()}.pt"
     if not os.path.exists(model_path):
         raise FileNotFoundError(model_path)
