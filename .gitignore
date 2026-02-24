@@ -229,5 +229,7 @@ tmp_cpp_selfplay/
 # Ignore log files
 logs/
 
+# Ignore Build File
+cpp_selfplay
 
 # End of https://www.toptal.com/developers/gitignore/api/windows,jupyternotebooks,python

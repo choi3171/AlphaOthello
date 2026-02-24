@@ -11,8 +11,7 @@ int count_dir(const Board& board, int r, int c, int dr, int dc, int8_t player) {
 
   int nr = r + dr;
   int nc = c + dc;
-  while (nr >= 0 && nr < kBoardSize && nc >= 0 && nc < kBoardSize &&
-         board[nr * kBoardSize + nc] == player) {
+  while (nr >= 0 && nr < kBoardSize && nc >= 0 && nc < kBoardSize && board[nr * kBoardSize + nc] == player) {
     count++;
     nr += dr;
     nc += dc;
@@ -20,8 +19,7 @@ int count_dir(const Board& board, int r, int c, int dr, int dc, int8_t player) {
 
   nr = r - dr;
   nc = c - dc;
-  while (nr >= 0 && nr < kBoardSize && nc >= 0 && nc < kBoardSize &&
-         board[nr * kBoardSize + nc] == player) {
+  while (nr >= 0 && nr < kBoardSize && nc >= 0 && nc < kBoardSize && board[nr * kBoardSize + nc] == player) {
     count++;
     nr -= dr;
     nc -= dc;
@@ -53,15 +51,16 @@ Board flipped_perspective(const Board& board) {
   return out;
 }
 
-std::vector<int> valid_moves(const Board& board) {
-  std::vector<int> moves;
-  moves.reserve(kActionSize);
+MoveList valid_moves(const Board& board) {
+  static thread_local int moves_buffer[kActionSize];
+  int count = 0;
+
   for (int a = 0; a < kActionSize; a++) {
     if (board[a] == 0) {
-      moves.push_back(a);
+      moves_buffer[count++] = a;
     }
   }
-  return moves;
+  return {moves_buffer, count};
 }
 
 bool is_full(const Board& board) {
@@ -94,10 +93,8 @@ bool check_win(const Board& board, int action, int8_t player) {
 
   const int r = row_of(action);
   const int c = col_of(action);
-  return count_dir(board, r, c, 1, 0, player) >= 5 ||
-         count_dir(board, r, c, 0, 1, player) >= 5 ||
-         count_dir(board, r, c, 1, 1, player) >= 5 ||
-         count_dir(board, r, c, 1, -1, player) >= 5;
+  return count_dir(board, r, c, 1, 0, player) >= 5 || count_dir(board, r, c, 0, 1, player) >= 5 ||
+         count_dir(board, r, c, 1, 1, player) >= 5 || count_dir(board, r, c, 1, -1, player) >= 5;
 }
 
 }  // namespace gomoku
