@@ -310,7 +310,15 @@ class AlphaZeroParallel:
         os.makedirs("./saved_model", exist_ok=True)
         os.makedirs(self.log_dir, exist_ok=True)
 
-        for iteration in range(self.args["num_iterations"]):
+        total_iterations = int(self.args["num_iterations"])
+        start_iteration = max(0, int(self.args.get("start_iteration", 0)))
+        if start_iteration >= total_iterations:
+            raise ValueError(
+                f"start_iteration ({start_iteration}) must be smaller than "
+                f"num_iterations ({total_iterations})"
+            )
+
+        for iteration in range(start_iteration, total_iterations):
             iteration_start = time.perf_counter()
             onnx_path = f"./tmp_cpp_selfplay/model_{iteration}.onnx"
             memory_path = f"./tmp_cpp_selfplay/memory_{iteration}.bin"
