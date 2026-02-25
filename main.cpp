@@ -9,7 +9,7 @@
 #include <thread>
 
 #include "onnx_infer.h"
-#include "game.h"
+#include "games/game.h"
 #include "search.h"
 
 namespace {

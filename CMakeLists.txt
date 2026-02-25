@@ -10,10 +10,10 @@ set(GAME_IMPL "gomoku" CACHE STRING "Game implementation to compile (gomoku or q
 set_property(CACHE GAME_IMPL PROPERTY STRINGS gomoku quoridor)
 
 if(GAME_IMPL STREQUAL "gomoku")
-  set(GAME_SOURCE gomoku.cpp)
+  set(GAME_SOURCE games/gomoku.cpp)
   add_compile_definitions(GAME_IMPL_GOMOKU)
 elseif(GAME_IMPL STREQUAL "quoridor")
-  set(GAME_SOURCE quoridor.cpp)
+  set(GAME_SOURCE games/quoridor.cpp)
   add_compile_definitions(GAME_IMPL_QUORIDOR)
 else()
   message(FATAL_ERROR "Unsupported GAME_IMPL='${GAME_IMPL}'. Use gomoku or quoridor.")

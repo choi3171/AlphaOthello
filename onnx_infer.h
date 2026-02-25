@@ -7,7 +7,7 @@
 #include <utility>
 #include <vector>
 
-#include "game.h"
+#include "games/game.h"
 
 class OnnxInfer {
  public:
