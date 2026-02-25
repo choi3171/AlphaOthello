@@ -55,7 +55,7 @@ Board flipped_perspective(const Board& board) {
   return out;
 }
 
-int get_valid_moves(const Board& board, int* moves_out) {
+int get_valid_moves(Board& board, int* moves_out) {
   int count = 0;
   for (int a = 0; a < kActionSize; a++) {
     if (board[static_cast<size_t>(a)] == 0) {
@@ -67,7 +67,8 @@ int get_valid_moves(const Board& board, int* moves_out) {
 
 MoveList valid_moves(const Board& board) {
   static thread_local int scratch[kActionSize];
-  const int count = get_valid_moves(board, scratch);
+  Board tmp = board;
+  const int count = get_valid_moves(tmp, scratch);
   return {scratch, count};
 }
 
@@ -123,4 +124,3 @@ void to_board_plane(const Board& board, std::vector<int8_t>& out_plane) {
 int encoded_state_size() { return kInputChannels * kActionSize; }
 
 }  // namespace gomoku
-

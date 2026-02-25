@@ -120,4 +120,3 @@ inline void to_board_plane(const State& state, std::vector<int8_t>& out_plane) {
 }
 
 }  // namespace Quoridor
-

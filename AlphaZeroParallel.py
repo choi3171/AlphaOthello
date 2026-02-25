@@ -64,14 +64,11 @@ class AlphaZeroParallel:
                 "temperature_halflife", self.args.get("chosenMoveTemperatureHalflife", 19.0)
             )
         )
-        game_name = str(self.args.get("game", "gomoku")).lower()
         seed_base = self.args.get("seed", 0)
         seed = int(seed_base + iteration)
 
         cmd = [
             cpp_bin,
-            "--game",
-            game_name,
             "--onnx",
             onnx_path,
             "--out",
