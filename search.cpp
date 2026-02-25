@@ -509,11 +509,9 @@ float scheduled_temperature(
     return static_cast<float>(std::max(0.0, base));
   }
   const int clamped_move = std::max(0, move_number);
-  const double board_area = static_cast<double>(game::kBoardSize * game::kBoardSize);
-  const double board_scale = 19.0 / std::sqrt(board_area);
-  const double halflives =
-      (static_cast<double>(clamped_move) / halflife) * board_scale;
-  const double scheduled = base + (early - base) * std::pow(0.5, halflives);
+  const double halflives = static_cast<double>(clamped_move) / halflife;
+  const double decayed = early * std::pow(0.5, halflives);
+  const double scheduled = std::max(base, decayed);
   return static_cast<float>(std::max(0.0, scheduled));
 }
 
