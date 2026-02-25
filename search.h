@@ -15,6 +15,7 @@ struct SearchParams {
   float dirichlet_epsilon = 0.25f;
   float dirichlet_alpha = 0.3f;
   int parallel_games = 1;
+  int pcr_full_search_prob = 25;
 };
 
 struct TrainingRow {

@@ -589,11 +589,14 @@ SelfplayResult run_selfplay_games(
         canonical_states.resize(active_games.size());
         target_searches.resize(active_games.size());
         is_full_search.resize(active_games.size());
+        const int pcr_full_prob = std::clamp(params.pcr_full_search_prob, 0, 100);
         std::uniform_int_distribution<int> pcr_dist(0, 99);
         for (size_t i = 0; i < active_games.size(); i++) {
           canonical_states[i] =
               game::canonical_board(active_games[i].board, active_games[i].player);
-          const bool full_search = (pcr_dist(rng) < 25);
+          const bool full_search =
+              (pcr_full_prob >= 100) ||
+              ((pcr_full_prob > 0) && (pcr_dist(rng) < pcr_full_prob));
           is_full_search[i] = full_search;
           const int reduced = std::max(1, params.num_searches / 4);
           target_searches[i] = full_search ? params.num_searches : reduced;

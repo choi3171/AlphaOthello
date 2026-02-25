@@ -27,6 +27,7 @@ struct CliArgs {
   int threads = -1;
   int nn_max_batch_size = 64;
   int parallel_games = 1;
+  int pcr_full_search_prob = 25;
   bool use_cuda = false;
   int cuda_device_id = 0;
   uint64_t seed = 0;
@@ -41,6 +42,7 @@ void print_usage() {
       << " [--temp-early <T0>] [--temp-halflife <H>]"
       << " --dirichlet-epsilon <E> --dirichlet-alpha <A>"
       << " [--parallel-games <N>]"
+      << " [--pcr-full-search-prob <0..100>]"
       << " [--nn-max-batch-size <N>]"
       << " [--use-cuda] [--cuda-device-id <ID>]"
       << " [--stats-out <stats.bin>]\n";
@@ -90,6 +92,8 @@ CliArgs parse_args(int argc, char** argv) {
       args.nn_max_batch_size = std::stoi(next("--nn-max-batch-size"));
     } else if (key == "--parallel-games") {
       args.parallel_games = std::stoi(next("--parallel-games"));
+    } else if (key == "--pcr-full-search-prob") {
+      args.pcr_full_search_prob = std::stoi(next("--pcr-full-search-prob"));
     } else if (key == "--use-cuda") {
       args.use_cuda = true;
     } else if (key == "--cuda-device-id") {
@@ -120,6 +124,7 @@ CliArgs parse_args(int argc, char** argv) {
   if (args.parallel_games <= 0) {
     args.parallel_games = 1;
   }
+  args.pcr_full_search_prob = std::clamp(args.pcr_full_search_prob, 0, 100);
   if (args.temp_early < 0.0f) {
     args.temp_early = args.temp;
   }
@@ -148,6 +153,7 @@ int main(int argc, char** argv) {
     params.dirichlet_epsilon = cli.dirichlet_epsilon;
     params.dirichlet_alpha = cli.dirichlet_alpha;
     params.parallel_games = cli.parallel_games;
+    params.pcr_full_search_prob = cli.pcr_full_search_prob;
 
     const auto all_start = std::chrono::steady_clock::now();
     const auto infer_init_start = std::chrono::steady_clock::now();

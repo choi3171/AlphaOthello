@@ -66,6 +66,7 @@ class AlphaZeroParallel:
         )
         seed_base = self.args.get("seed", 0)
         seed = int(seed_base + iteration)
+        pcr_full_search_prob = int(self.args.get("pcr_full_search_prob", 25))
 
         cmd = [
             cpp_bin,
@@ -79,6 +80,8 @@ class AlphaZeroParallel:
             str(self.args["num_selfPlay_iterations"]),
             "--parallel-games",
             str(self.args.get("num_parallel_games", 1)),
+            "--pcr-full-search-prob",
+            str(pcr_full_search_prob),
             "--searches",
             str(self.args["num_searches"]),
             "--cpuct",
