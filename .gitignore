@@ -229,6 +229,9 @@ tmp_cpp_selfplay/
 # Ignore log files
 logs/
 
+# Ignore run profiles
+run_profiles/
+
 # Ignore Build File
 cpp_selfplay
 
