@@ -190,8 +190,7 @@ int collect_valid_moves(const game::Board& state, std::vector<int>& scratch) {
   if (scratch.size() < static_cast<size_t>(game::kActionSize)) {
     scratch.resize(static_cast<size_t>(game::kActionSize));
   }
-  game::Board tmp = state;
-  return game::get_valid_moves(tmp, scratch.data());
+  return game::get_valid_moves(state, scratch.data());
 }
 
 void expand_batch(
@@ -773,4 +772,3 @@ void write_stats_file(
         static_cast<std::streamsize>(board_area * sizeof(int8_t)));
   }
 }
-

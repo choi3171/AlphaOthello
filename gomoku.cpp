@@ -55,7 +55,7 @@ Board flipped_perspective(const Board& board) {
   return out;
 }
 
-int get_valid_moves(Board& board, int* moves_out) {
+int get_valid_moves(const Board& board, int* moves_out) {
   int count = 0;
   for (int a = 0; a < kActionSize; a++) {
     if (board[static_cast<size_t>(a)] == 0) {
@@ -65,20 +65,9 @@ int get_valid_moves(Board& board, int* moves_out) {
   return count;
 }
 
-MoveList valid_moves(const Board& board) {
-  static thread_local int scratch[kActionSize];
-  Board tmp = board;
-  const int count = get_valid_moves(tmp, scratch);
-  return {scratch, count};
-}
-
 bool is_full(const Board& board) {
-  for (int i = 0; i < kActionSize; i++) {
-    if (board[static_cast<size_t>(i)] == 0) {
-      return false;
-    }
-  }
-  return true;
+  static thread_local int scratch[kActionSize];
+  return get_valid_moves(board, scratch) == 0;
 }
 
 bool apply_move(Board& board, int action, int8_t player) {
