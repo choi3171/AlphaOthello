@@ -50,7 +50,7 @@ class AlphaZeroParallel:
         self.model.to(original_device)
 
     def _run_cpp_selfplay(self, onnx_path, memory_path, stats_path, iteration):
-        cpp_bin = self.args.get("cpp_selfplay_path", "./cpp_selfplay")
+        cpp_bin = self.args.get("cpp_selfplay_path", "./build/cpp_selfplay")
         threads = int(self.args.get("cpp_threads", 0))
         nn_max_batch_size = int(self.args.get("cpp_nn_max_batch_size", 64))
         use_cuda = bool(self.args.get("cpp_use_cuda", torch.cuda.is_available()))

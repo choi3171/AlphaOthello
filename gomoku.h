@@ -10,7 +10,16 @@ namespace gomoku {
 constexpr int kBoardSize = 10;
 constexpr int kActionSize = kBoardSize * kBoardSize;
 constexpr int kInputChannels = 3;
-using Board = std::array<int8_t, kActionSize>;
+
+struct Bitboard100 {
+  uint64_t lo = 0ULL;  // bits [0, 63]
+  uint64_t hi = 0ULL;  // bits [64, 99]
+};
+
+struct Board {
+  Bitboard100 p1{};  // +1 stones
+  Bitboard100 p2{};  // -1 stones
+};
 
 Board initial_board();
 Board canonical_board(const Board& board, int8_t player);
