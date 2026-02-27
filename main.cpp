@@ -8,19 +8,19 @@
 #include <string>
 #include <thread>
 
-#include "game.h"
 #include "onnx_infer.h"
+#include "games/game.h"
 #include "search.h"
 
 namespace {
 
 struct CliArgs {
-  std::string game_name = "gomoku";
   std::string onnx_path;
   std::string out_path;
   std::string stats_out_path;
   int games = 0;
   int searches = 64;
+  int max_game_moves = 0;
   float cpuct = 2.0f;
   float temp = 1.0f;
   float temp_early = -1.0f;
@@ -28,20 +28,30 @@ struct CliArgs {
   int threads = -1;
   int nn_max_batch_size = 64;
   int parallel_games = 1;
+  int pcr_full_search_prob = 25;
   bool use_cuda = false;
   int cuda_device_id = 0;
   uint64_t seed = 0;
   float dirichlet_epsilon = 0.25f;
   float dirichlet_alpha = 0.3f;
+  bool use_target_pruning = true;
+  bool use_fpu = true;
+  bool use_dynamic_cpuct = true;
+  bool use_shaped_dirichlet = true;
+  float fpu_reduction = 0.2f;
+  float c_base = 19652.0f;
+  float target_pruning_threshold = 0.05f;
 };
 
 void print_usage() {
   std::cout
-      << "Usage: ./cpp_selfplay --game <gomoku|quoridor> --onnx <model.onnx> --out <memory.bin> --games <N>"
+      << "Usage: ./cpp_selfplay --onnx <model.onnx> --out <memory.bin> --games <N>"
       << " --searches <M> --cpuct <C> --temp <T> --threads <K> --seed <S>"
       << " [--temp-early <T0>] [--temp-halflife <H>]"
       << " --dirichlet-epsilon <E> --dirichlet-alpha <A>"
       << " [--parallel-games <N>]"
+      << " [--pcr-full-search-prob <0..100>]"
+      << " [--max-game-moves <N>]"
       << " [--nn-max-batch-size <N>]"
       << " [--use-cuda] [--cuda-device-id <ID>]"
       << " [--stats-out <stats.bin>]\n";
@@ -67,9 +77,7 @@ CliArgs parse_args(int argc, char** argv) {
       return argv[i];
     };
 
-    if (key == "--game") {
-      args.game_name = next("--game");
-    } else if (key == "--onnx") {
+    if (key == "--onnx") {
       args.onnx_path = next("--onnx");
     } else if (key == "--out") {
       args.out_path = next("--out");
@@ -79,6 +87,8 @@ CliArgs parse_args(int argc, char** argv) {
       args.games = std::stoi(next("--games"));
     } else if (key == "--searches") {
       args.searches = std::stoi(next("--searches"));
+    } else if (key == "--max-game-moves") {
+      args.max_game_moves = std::stoi(next("--max-game-moves"));
     } else if (key == "--cpuct") {
       args.cpuct = std::stof(next("--cpuct"));
     } else if (key == "--temp") {
@@ -93,6 +103,8 @@ CliArgs parse_args(int argc, char** argv) {
       args.nn_max_batch_size = std::stoi(next("--nn-max-batch-size"));
     } else if (key == "--parallel-games") {
       args.parallel_games = std::stoi(next("--parallel-games"));
+    } else if (key == "--pcr-full-search-prob") {
+      args.pcr_full_search_prob = std::stoi(next("--pcr-full-search-prob"));
     } else if (key == "--use-cuda") {
       args.use_cuda = true;
     } else if (key == "--cuda-device-id") {
@@ -103,6 +115,20 @@ CliArgs parse_args(int argc, char** argv) {
       args.dirichlet_epsilon = std::stof(next("--dirichlet-epsilon"));
     } else if (key == "--dirichlet-alpha") {
       args.dirichlet_alpha = std::stof(next("--dirichlet-alpha"));
+    } else if (key == "--no-target-pruning") {
+      args.use_target_pruning = false;
+    } else if (key == "--no-fpu") {
+      args.use_fpu = false;
+    } else if (key == "--no-dynamic-cpuct") {
+      args.use_dynamic_cpuct = false;
+    } else if (key == "--no-shaped-dirichlet") {
+      args.use_shaped_dirichlet = false;
+    } else if (key == "--fpu-reduction") {
+      args.fpu_reduction = std::stof(next("--fpu-reduction"));
+    } else if (key == "--c-base") {
+      args.c_base = std::stof(next("--c-base"));
+    } else if (key == "--target-pruning-threshold") {
+      args.target_pruning_threshold = std::stof(next("--target-pruning-threshold"));
     } else if (key == "--help" || key == "-h") {
       print_usage();
       std::exit(0);
@@ -123,6 +149,10 @@ CliArgs parse_args(int argc, char** argv) {
   if (args.parallel_games <= 0) {
     args.parallel_games = 1;
   }
+  if (args.max_game_moves < 0) {
+    args.max_game_moves = 0;
+  }
+  args.pcr_full_search_prob = std::clamp(args.pcr_full_search_prob, 0, 100);
   if (args.temp_early < 0.0f) {
     args.temp_early = args.temp;
   }
@@ -141,10 +171,10 @@ int main(int argc, char** argv) {
     };
 
     const CliArgs cli = parse_args(argc, argv);
-    const game::Config game_cfg = game::make_config(cli.game_name);
 
     SearchParams params;
     params.num_searches = cli.searches;
+    params.max_game_moves = cli.max_game_moves;
     params.cpuct = cli.cpuct;
     params.temperature = cli.temp;
     params.temperature_early = cli.temp_early;
@@ -152,11 +182,18 @@ int main(int argc, char** argv) {
     params.dirichlet_epsilon = cli.dirichlet_epsilon;
     params.dirichlet_alpha = cli.dirichlet_alpha;
     params.parallel_games = cli.parallel_games;
+    params.pcr_full_search_prob = cli.pcr_full_search_prob;
+    params.use_dynamic_cpuct = cli.use_dynamic_cpuct;
+    params.use_fpu = cli.use_fpu;
+    params.use_target_pruning = cli.use_target_pruning;
+    params.use_shaped_dirichlet = cli.use_shaped_dirichlet;
+    params.fpu_reduction = cli.fpu_reduction;
+    params.c_base = cli.c_base;
+    params.target_pruning_threshold = cli.target_pruning_threshold;
 
     const auto all_start = std::chrono::steady_clock::now();
     const auto infer_init_start = std::chrono::steady_clock::now();
     OnnxInfer infer(
-        game_cfg,
         cli.onnx_path,
         cli.use_cuda,
         cli.cuda_device_id,
@@ -164,22 +201,21 @@ int main(int argc, char** argv) {
     const auto infer_init_end = std::chrono::steady_clock::now();
 
     const auto selfplay_start = std::chrono::steady_clock::now();
-    SelfplayResult result = run_selfplay_games(
-        infer, game_cfg, params, cli.games, cli.threads, cli.seed);
+    SelfplayResult result = run_selfplay_games(infer, params, cli.games, cli.threads, cli.seed);
     const auto selfplay_end = std::chrono::steady_clock::now();
 
     const auto write_memory_start = std::chrono::steady_clock::now();
-    write_memory_file(cli.out_path, result.rows, game_cfg);
+    write_memory_file(cli.out_path, result.rows);
     const auto write_memory_end = std::chrono::steady_clock::now();
 
     const auto write_stats_start = std::chrono::steady_clock::now();
     if (!cli.stats_out_path.empty()) {
-      write_stats_file(cli.stats_out_path, result.stats, game_cfg);
+      write_stats_file(cli.stats_out_path, result.stats);
     }
     const auto write_stats_end = std::chrono::steady_clock::now();
     const auto all_end = std::chrono::steady_clock::now();
 
-    std::cout << "game: " << game_cfg.name << "\n";
+    std::cout << "game: " << kGameName << "\n";
     std::cout << "generated rows: " << result.rows.size() << "\n";
     std::cout << "win/draw/lose: " << result.stats.win << "/" << result.stats.draw << "/"
               << result.stats.lose << "\n";
@@ -238,4 +274,3 @@ int main(int argc, char** argv) {
     return 1;
   }
 }
-

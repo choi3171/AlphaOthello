@@ -49,27 +49,8 @@ class AlphaZeroParallel:
         )
         self.model.to(original_device)
 
-    def _maybe_convert_onnx_fp16(self, onnx_path):
-        if not bool(self.args.get("cpp_onnx_fp16", False)):
-            return onnx_path
-
-        try:
-            import onnx
-            from onnxconverter_common import float16
-        except Exception as e:
-            raise RuntimeError(
-                "cpp_onnx_fp16=true requires `onnx` and `onnxconverter-common` "
-                "(pip install onnx onnxconverter-common)"
-            ) from e
-
-        fp16_path = onnx_path.replace(".onnx", "_fp16.onnx")
-        model = onnx.load(onnx_path)
-        model_fp16 = float16.convert_float_to_float16(model, keep_io_types=True)
-        onnx.save(model_fp16, fp16_path)
-        return fp16_path
-
     def _run_cpp_selfplay(self, onnx_path, memory_path, stats_path, iteration):
-        cpp_bin = self.args.get("cpp_selfplay_path", "./cpp_selfplay")
+        cpp_bin = self.args.get("cpp_selfplay_path", "./build/cpp_selfplay")
         threads = int(self.args.get("cpp_threads", 0))
         nn_max_batch_size = int(self.args.get("cpp_nn_max_batch_size", 64))
         use_cuda = bool(self.args.get("cpp_use_cuda", torch.cuda.is_available()))
@@ -83,14 +64,22 @@ class AlphaZeroParallel:
                 "temperature_halflife", self.args.get("chosenMoveTemperatureHalflife", 19.0)
             )
         )
-        game_name = str(self.args.get("game", "gomoku")).lower()
         seed_base = self.args.get("seed", 0)
         seed = int(seed_base + iteration)
+        pcr_full_search_prob = int(self.args.get("pcr_full_search_prob", 25))
+        max_game_moves = int(self.args.get("max_game_moves", 0))
+
+        use_target_pruning = bool(self.args.get("use_target_pruning", True))
+        use_fpu = bool(self.args.get("use_fpu", True))
+        use_dynamic_cpuct = bool(self.args.get("use_dynamic_cpuct", True))
+        use_shaped_dirichlet = bool(self.args.get("use_shaped_dirichlet", True))
+
+        fpu_reduction = float(self.args.get("fpu_reduction", 0.2))
+        c_base = float(self.args.get("c_base", 19652.0))
+        target_pruning_threshold = float(self.args.get("target_pruning_threshold", 0.05))
 
         cmd = [
             cpp_bin,
-            "--game",
-            game_name,
             "--onnx",
             onnx_path,
             "--out",
@@ -101,6 +90,10 @@ class AlphaZeroParallel:
             str(self.args["num_selfPlay_iterations"]),
             "--parallel-games",
             str(self.args.get("num_parallel_games", 1)),
+            "--pcr-full-search-prob",
+            str(pcr_full_search_prob),
+            "--max-game-moves",
+            str(max_game_moves),
             "--searches",
             str(self.args["num_searches"]),
             "--cpuct",
@@ -121,10 +114,24 @@ class AlphaZeroParallel:
             str(self.args["dirichlet_epsilon"]),
             "--dirichlet-alpha",
             str(self.args["dirichlet_alpha"]),
+            "--target-pruning-threshold",
+            str(target_pruning_threshold),
+            "--fpu-reduction",
+            str(fpu_reduction),
+            "--c-base",
+            str(c_base),
         ]
         if use_cuda:
             cmd.extend(["--use-cuda", "--cuda-device-id", str(cuda_device_id)])
-
+        if not use_target_pruning:
+            cmd.append("--no-target-pruning")
+        if not use_fpu:
+            cmd.append("--no-fpu")
+        if not use_dynamic_cpuct:
+            cmd.append("--no-dynamic-cpuct")
+        if not use_shaped_dirichlet:
+            cmd.append("--no-shaped-dirichlet")
+        
         start_t = time.time()
         subprocess.run(cmd, check=True)
         end_t = time.time()
@@ -236,6 +243,43 @@ class AlphaZeroParallel:
                 pass
         return sorted(removed)
 
+    def _cleanup_stale_runtime_artifacts(self, iteration):
+        artifact_dir = "./tmp_cpp_selfplay"
+        removed_stats = []
+        removed_onnx = []
+
+        if not os.path.isdir(artifact_dir):
+            return removed_stats, removed_onnx
+
+        stats_pattern = re.compile(r"^stats_(\d+)\.bin$")
+        onnx_pattern = re.compile(r"^model_(\d+)\.onnx$")
+
+        for name in os.listdir(artifact_dir):
+            match = stats_pattern.match(name)
+            if match is not None:
+                idx = int(match.group(1))
+                if idx <= iteration:
+                    path = os.path.join(artifact_dir, name)
+                    try:
+                        os.remove(path)
+                        removed_stats.append(idx)
+                    except OSError:
+                        pass
+                continue
+
+            match = onnx_pattern.match(name)
+            if match is not None:
+                idx = int(match.group(1))
+                if idx <= iteration:
+                    path = os.path.join(artifact_dir, name)
+                    try:
+                        os.remove(path)
+                        removed_onnx.append(idx)
+                    except OSError:
+                        pass
+
+        return sorted(removed_stats), sorted(removed_onnx)
+
     def _load_stats_bin(self, stats_path):
         def read_u32(f):
             buf = f.read(4)
@@ -268,15 +312,21 @@ class AlphaZeroParallel:
 
             final_state_count = read_u32(f)
             final_states = []
-            expected_state_bytes = self.game.row_count * self.game.column_count
+            if hasattr(self.game, "final_state_size"):
+                expected_state_bytes = int(self.game.final_state_size())
+            else:
+                expected_state_bytes = self.game.row_count * self.game.column_count
             for _ in range(final_state_count):
                 raw = f.read(expected_state_bytes)
                 if len(raw) != expected_state_bytes:
                     raise RuntimeError("Invalid stats file: truncated final state")
-                board = np.frombuffer(raw, dtype=np.int8).copy().reshape(
-                    self.game.row_count, self.game.column_count
-                )
-                final_states.append(board)
+                if hasattr(self.game, "decode_final_state"):
+                    final_state = self.game.decode_final_state(raw)
+                else:
+                    final_state = np.frombuffer(raw, dtype=np.int8).copy().reshape(
+                        self.game.row_count, self.game.column_count
+                    )
+                final_states.append(final_state)
 
         return dict(
             win=int(win),
@@ -329,7 +379,15 @@ class AlphaZeroParallel:
         os.makedirs("./saved_model", exist_ok=True)
         os.makedirs(self.log_dir, exist_ok=True)
 
-        for iteration in range(self.args["num_iterations"]):
+        total_iterations = int(self.args["num_iterations"])
+        start_iteration = max(0, int(self.args.get("start_iteration", 0)))
+        if start_iteration >= total_iterations:
+            raise ValueError(
+                f"start_iteration ({start_iteration}) must be smaller than "
+                f"num_iterations ({total_iterations})"
+            )
+
+        for iteration in range(start_iteration, total_iterations):
             iteration_start = time.perf_counter()
             onnx_path = f"./tmp_cpp_selfplay/model_{iteration}.onnx"
             memory_path = f"./tmp_cpp_selfplay/memory_{iteration}.bin"
@@ -337,7 +395,6 @@ class AlphaZeroParallel:
 
             t0 = time.perf_counter()
             self._export_onnx(onnx_path)
-            onnx_path = self._maybe_convert_onnx_fp16(onnx_path)
             onnx_export_sec = time.perf_counter() - t0
 
             t0 = time.perf_counter()
@@ -358,6 +415,8 @@ class AlphaZeroParallel:
             stats = self._load_stats_bin(stats_path)
             stats_load_sec = time.perf_counter() - t0
             self.add_history(stats)
+            removed_stale_stats = []
+            removed_stale_onnx = []
 
             monitor_log_sec = 0.0
             if self.monitor:
@@ -393,6 +452,7 @@ class AlphaZeroParallel:
                         f"final_state/{iteration}", self.game.get_visualized_state(board), i
                     )
                 monitor_log_sec = time.perf_counter() - t0
+            removed_stale_stats, removed_stale_onnx = self._cleanup_stale_runtime_artifacts(iteration)
 
             self.model.train()
             epoch_times = []
@@ -433,6 +493,10 @@ class AlphaZeroParallel:
                 print(f"[profile][iter {iteration}] replay_memory_iters={self.args.get('replay_memory_iters', 0)} loaded={replay_desc}")
             if removed_stale:
                 print(f"[profile][iter {iteration}] removed_stale_memory_bins={removed_stale}")
+            if removed_stale_stats:
+                print(f"[profile][iter {iteration}] removed_stale_stats_bins={removed_stale_stats}")
+            if removed_stale_onnx:
+                print(f"[profile][iter {iteration}] removed_stale_onnx_models={removed_stale_onnx}")
             print(
                 f"[profile][iter {iteration}] "
                 f"train_epoch_sec min/avg/max="
