@@ -37,6 +37,7 @@ constexpr int INNER_WALL_CNT = INNER_WALL * INNER_WALL;
 constexpr int ACTION_SIZE = 4 + 2 * INNER_WALL_CNT + 1;
 constexpr int ACTION_PASS = ACTION_SIZE - 1;
 constexpr int WALLS_LEFT = 5;
+constexpr bitboard BOARD_MASK = ((((bitboard)1) << NUM_SQUARES) - 1);
 
 constexpr int kBoardSize = SIZE;
 constexpr int kActionSize = ACTION_SIZE;

@@ -14,9 +14,9 @@ namespace quoridor5 {
 using bitboard = unsigned __int128;
 
 struct State {
-    bitboard p_bits[2];   // 81 bits (0..80)
-    bitboard walls_h;     // 100 bits (10x10)
-    bitboard walls_v;     // 100 bits (10x10)
+    bitboard p_bits[2];   // 25 bits
+    bitboard walls_h;     // 36 bits (6x6)
+    bitboard walls_v;     // 36 bits (6x6)
     bitboard h_block;     
     bitboard v_block;     
     int8_t walls_left[2];
@@ -46,6 +46,7 @@ public:
     static const int ACTION_SIZE = 4 + 2 * INNER_WALL_CNT + 1;
     static const int ACTION_PASS = ACTION_SIZE - 1;
     static const int WALLS_LEFT = 3;                      // 3개로 변경
+    static constexpr bitboard BOARD_MASK = ((((bitboard)1) << NUM_SQUARES) - 1);
 
     bitboard L_MASK = 0, R_MASK = 0;
     bitboard goal_masks[2];
@@ -95,7 +96,6 @@ public:
             s.walls_v |= (((bitboard)1) << (i * WALL_SIZE + 0));           // Left edge
             s.walls_v |= (((bitboard)1) << (i * WALL_SIZE + SIZE));        // Right edge
         }
-        recompute_blocks(s);
 
         s.walls_left[0] = WALLS_LEFT;
         s.walls_left[1] = WALLS_LEFT;
@@ -324,6 +324,7 @@ public:
             bitboard right = ((reachable & ~R_MASK) << 1) & ~(v_block << 1);
 
             reachable |= (up | down | left | right);
+            reachable &= BOARD_MASK;
 
             if (reachable & goal) return true;
             if (reachable == prev) return false;
@@ -453,22 +454,6 @@ private:
                 vb |= ((bitboard)1) << (w_r * SIZE + (w_c - 1));
                 V_EXPAND_LUT[idx] = vb;
             }
-        }
-    }
-
-    void recompute_blocks(State& s) const {
-        s.h_block = 0; s.v_block = 0;
-        bitboard wh = s.walls_h & WALL_MASK_FULL;
-        while (wh) {
-            int i = get_lsb_index(wh);
-            wh &= (wh - 1);
-            if(i < WALL_CNT) s.h_block |= H_EXPAND_LUT[i];
-        }
-        bitboard wv = s.walls_v & WALL_MASK_FULL;
-        while (wv) {
-            int i = get_lsb_index(wv);
-            wv &= (wv - 1);
-            if(i < WALL_CNT) s.v_block |= V_EXPAND_LUT[i];
         }
     }
 };
