@@ -85,8 +85,12 @@ class AlphaZero:
             
             temperature_action_probs = action_probs ** (1 / self.args['temperature'])
             action = np.random.choice(self.game.action_size, p=temperature_action_probs) # Divide temperature_action_probs with its sum in case of an error
-            
-            state = self.game.get_next_state(state, action, player)
+            real_action = (
+                self.game.action_from_canonical(action, player)
+                if hasattr(self.game, "action_from_canonical")
+                else action
+            )
+            state = self.game.get_next_state(state, real_action, player)
             
             value, is_terminal = self.game.get_value_and_terminated(self.game.change_perspective(state, player), action)
             

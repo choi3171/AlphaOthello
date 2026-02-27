@@ -70,6 +70,11 @@ inline bool check_win(const State& state, int action, int8_t player) {
   return check_win(state, p_idx);
 }
 
+inline int action_from_canonical(int action, int8_t player) {
+  (void)player;
+  return action;
+}
+
 inline bool bit_test(uint64_t bits, int idx) {
   return ((bits >> idx) & 1ULL) != 0ULL;
 }

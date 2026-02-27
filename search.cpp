@@ -769,17 +769,33 @@ SelfplayResult run_selfplay_games(
           step.is_full_search = is_full_search[static_cast<size_t>(i)];
           game_inst.hist.push_back(std::move(step));
 
-          thread_local std::vector<int> valid;
-          const int valid_count = collect_valid_moves(game_inst.board, valid);
+          thread_local std::vector<int> valid_canonical;
+          const int valid_count =
+              collect_valid_moves(canonical_states[static_cast<size_t>(i)], valid_canonical);
           const float move_temp =
               scheduled_temperature(params, static_cast<int>(game_inst.hist.size()) - 1);
-          const int action =
+          const int action_canonical =
               sample_action(
                   all_action_probs[static_cast<size_t>(i)],
-                  valid.data(),
+                  valid_canonical.data(),
                   valid_count,
                   move_temp,
                   rng);
+          const int action = game::action_from_canonical(action_canonical, game_inst.player);
+
+#ifndef NDEBUG
+          thread_local std::vector<int> valid_real;
+          const int valid_real_count = collect_valid_moves(game_inst.board, valid_real);
+          const bool mapped_action_valid =
+              std::find(
+                  valid_real.begin(),
+                  valid_real.begin() + static_cast<std::ptrdiff_t>(valid_real_count),
+                  action) !=
+              (valid_real.begin() + static_cast<std::ptrdiff_t>(valid_real_count));
+          if (!mapped_action_valid) {
+            throw std::runtime_error("mapped canonical action is invalid on real board");
+          }
+#endif
 
           game::apply_move(game_inst.board, action, game_inst.player);
           const bool win = game::check_win(game_inst.board, action, game_inst.player);

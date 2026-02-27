@@ -34,6 +34,82 @@ def _default_optimizer_path_from_model_path(model_path):
     return os.path.join(dirname, optimizer_name)
 
 
+def _action_to_text(game, action):
+    action = int(action)
+    game_name = str(getattr(game, "game_name", "")).lower()
+
+    if game_name == "gomoku":
+        r = action // game.column_count
+        c = action % game.column_count
+        return f"place stone at (row={r}, col={c})"
+
+    if game_name.startswith("quoridor"):
+        if action == getattr(game, "action_pass", -1):
+            return "pass (jump phase)"
+        if action < 4:
+            return ("move up", "move down", "move left", "move right")[action]
+
+        inner_wall_cnt = int(getattr(game, "inner_wall_cnt", 0))
+        inner_wall = int(getattr(game, "inner_wall", 0))
+        if inner_wall_cnt > 0 and inner_wall > 0:
+            if action < 4 + inner_wall_cnt:
+                idx = action - 4
+                r = idx // inner_wall
+                c = idx % inner_wall
+                return f"place horizontal wall at inner(r={r + 1}, c={c + 1})"
+            if action < 4 + 2 * inner_wall_cnt:
+                idx = action - (4 + inner_wall_cnt)
+                r = idx // inner_wall
+                c = idx % inner_wall
+                return f"place vertical wall at inner(r={r + 1}, c={c + 1})"
+
+    return f"action {action}"
+
+
+def _show_visualized_state(game, state, player, turn_idx):
+    try:
+        vis = game.get_visualized_state(state)
+        if vis.ndim == 3 and vis.shape[0] in (1, 3):
+            image = np.transpose(vis, (1, 2, 0))
+        else:
+            image = vis
+        plt.figure("AlphaZero Play", figsize=(6, 6))
+        plt.clf()
+        plt.imshow(np.clip(image, 0.0, 1.0), interpolation="nearest")
+        plt.axis("off")
+        plt.title(f"{game} | turn={turn_idx} | player={player}")
+        plt.pause(0.001)
+    except Exception as e:
+        print(f"[warn] visualization failed: {e}")
+
+
+def _ask_human_action(game, valid_moves, player):
+    valid_actions = [i for i in range(game.action_size) if valid_moves[i] == 1]
+    if not valid_actions:
+        raise RuntimeError("No valid actions available")
+
+    print(f"\nplayer {player} valid actions:")
+    for idx, action in enumerate(valid_actions):
+        print(f"  [{idx}] {_action_to_text(game, action)} (id={action})")
+
+    while True:
+        raw = input("choose index or action id: ").strip()
+        if raw == "":
+            print("empty input")
+            continue
+        try:
+            choice = int(raw)
+        except ValueError:
+            print("enter an integer")
+            continue
+
+        if 0 <= choice < len(valid_actions):
+            return valid_actions[choice]
+        if choice in valid_actions:
+            return choice
+        print("invalid choice")
+
+
 def model_test():
     game = make_game("gomoku")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -114,25 +190,26 @@ def model_play(version, config_name="play0", human_player=1):
     mcts = MCTS(game, args, model)
     state = game.get_initial_state()
     player = 1
+    turn_idx = 0
+    plt.ion()
 
     while True:
-        print(state)
+        _show_visualized_state(game, state, player, turn_idx)
         if player == human_player:
             valid_moves = game.get_valid_moves(state)
-            print("valid:", [i for i in range(game.action_size) if valid_moves[i] == 1])
-            action = int(input(f"player {player} action (0-99): "))
-            if action < 0 or action >= game.action_size or valid_moves[action] == 0:
-                print("invalid action")
-                continue
+            action = _ask_human_action(game, valid_moves, player)
         else:
             neutral_state = game.change_perspective(state, player)
             mcts_probs = mcts.search(neutral_state)
             action = int(np.argmax(mcts_probs))
+            action = game.action_from_canonical(action, player) if hasattr(game, "action_from_canonical") else action
+            print(f"ai chooses: {_action_to_text(game, action)} (id={action})")
 
         state = game.get_next_state(state, action, player)
         value, is_terminal = game.get_value_and_terminated(game.change_perspective(state, player), action)
+        turn_idx += 1
         if is_terminal:
-            print(state)
+            _show_visualized_state(game, state, player, turn_idx)
             if value == 1:
                 print(player, "won")
             elif value == -1:
@@ -141,6 +218,7 @@ def model_play(version, config_name="play0", human_player=1):
                 print("draw")
             break
         player = game.get_opponent(player)
+    plt.ioff()
 
 
 if __name__ == "__main__":
