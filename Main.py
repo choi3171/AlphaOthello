@@ -175,19 +175,38 @@ def model_learn(config_name, resume_model=None, resume_optimizer=None, resume_it
     trainer.learn()
 
 
-def model_play(version, config_name="play0", human_player=1):
-    args = load_config(f"./configs/play/{config_name}.yaml")
-    game = make_game(args.get("game", "gomoku"))
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
+def _load_model_for_play(game, device, version):
     model = ResNet(game, 4, 64, device, input_channels=game.input_channels)
     model_path = f"./saved_model/model_{version}_{game.__repr__()}.pt"
     if not os.path.exists(model_path):
         raise FileNotFoundError(model_path)
     model.load_state_dict(torch.load(model_path, map_location=device))
     model.eval()
+    return model, model_path
 
-    mcts = MCTS(game, args, model)
+
+def model_play(version, config_name="play0", human_player=1, versus_version=None):
+    args = load_config(f"./configs/play/{config_name}.yaml")
+    game = make_game(args.get("game", "gomoku"))
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    model_a, model_a_path = _load_model_for_play(game, device, version)
+    mcts_a = MCTS(game, args, model_a)
+
+    ai_vs_ai = versus_version is not None
+    mcts_b = None
+    model_b_path = None
+    if ai_vs_ai:
+        if str(versus_version) == str(version):
+            mcts_b = mcts_a
+            model_b_path = model_a_path
+        else:
+            model_b, model_b_path = _load_model_for_play(game, device, versus_version)
+            mcts_b = MCTS(game, args, model_b)
+        print(f"[play] AI vs AI enabled: P1={model_a_path}, P2={model_b_path}")
+    else:
+        print(f"[play] Human vs AI: AI model={model_a_path}, human_player={human_player}")
+
     state = game.get_initial_state()
     player = 1
     turn_idx = 0
@@ -195,11 +214,12 @@ def model_play(version, config_name="play0", human_player=1):
 
     while True:
         _show_visualized_state(game, state, player, turn_idx)
-        if player == human_player:
+        if (not ai_vs_ai) and (player == human_player):
             valid_moves = game.get_valid_moves(state)
             action = _ask_human_action(game, valid_moves, player)
         else:
             neutral_state = game.change_perspective(state, player)
+            mcts = mcts_a if player == 1 else (mcts_b if mcts_b is not None else mcts_a)
             mcts_probs = mcts.search(neutral_state)
             action = int(np.argmax(mcts_probs))
             action = game.action_from_canonical(action, player) if hasattr(game, "action_from_canonical") else action
@@ -250,6 +270,12 @@ if __name__ == "__main__":
     play_parser.add_argument("--version", type=str, default="0")
     play_parser.add_argument("--config", type=str, default="play0")
     play_parser.add_argument("--human-player", type=int, default=1)
+    play_parser.add_argument(
+        "--versus-version",
+        type=str,
+        default=None,
+        help="If set, run AI vs AI. --version is player 1 model, --versus-version is player 2 model.",
+    )
 
     args = parser.parse_args()
 
@@ -258,4 +284,4 @@ if __name__ == "__main__":
     elif args.mode == "learn":
         model_learn(args.config, args.resume_model, args.resume_optimizer, args.resume_iter)
     elif args.mode == "play":
-        model_play(args.version, args.config, args.human_player)
+        model_play(args.version, args.config, args.human_player, args.versus_version)
