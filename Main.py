@@ -139,6 +139,10 @@ def model_learn(config_name, resume_model=None, resume_optimizer=None, resume_it
     game_name = args.get("game", "gomoku")
     game = make_game(game_name)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    config_stem = os.path.splitext(os.path.basename(str(config_name)))[0]
+    log_root = str(args.get("log_root", "logs"))
+    args["log_dir"] = os.path.join(log_root, str(game_name), config_stem)
+    print(f"[learn] tensorboard log_dir: {args['log_dir']}")
 
     model = ResNet(game, 4, 64, device, input_channels=game.input_channels)
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=0.0001)
