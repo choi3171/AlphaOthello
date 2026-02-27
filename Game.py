@@ -192,6 +192,10 @@ class Quoridor7:
             "p_bits": [int(state["p_bits"][0]), int(state["p_bits"][1])],
             "walls_h": int(state["walls_h"]),
             "walls_v": int(state["walls_v"]),
+            "walls_h_p1": int(state.get("walls_h_p1", 0)),
+            "walls_h_p2": int(state.get("walls_h_p2", 0)),
+            "walls_v_p1": int(state.get("walls_v_p1", 0)),
+            "walls_v_p2": int(state.get("walls_v_p2", 0)),
             "h_block": int(state["h_block"]),
             "v_block": int(state["v_block"]),
             "walls_left": np.array(state["walls_left"], dtype=np.int8).copy(),
@@ -222,6 +226,22 @@ class Quoridor7:
             bit = x & -x
             idx = bit.bit_length() - 1
             grid[idx // self.wall_size, idx % self.wall_size] = 1
+            x ^= bit
+        return grid
+
+    def _owner_grid_from_bits(self, p1_bits, p2_bits):
+        grid = np.zeros((self.wall_size, self.wall_size), dtype=np.int8)
+        x = int(p1_bits)
+        while x:
+            bit = x & -x
+            idx = bit.bit_length() - 1
+            grid[idx // self.wall_size, idx % self.wall_size] = 1
+            x ^= bit
+        x = int(p2_bits)
+        while x:
+            bit = x & -x
+            idx = bit.bit_length() - 1
+            grid[idx // self.wall_size, idx % self.wall_size] = -1
             x ^= bit
         return grid
 
@@ -351,6 +371,8 @@ class Quoridor7:
         return encoded_state
 
     def get_visualized_state(self, state):
+        wall_owner_h = np.zeros((self.row_count + 1, self.column_count + 1), dtype=np.int8)
+        wall_owner_v = np.zeros((self.row_count + 1, self.column_count + 1), dtype=np.int8)
         if isinstance(state, dict):
             board = self._board_from_state(state)
             if "walls_h" in state and isinstance(state["walls_h"], np.ndarray):
@@ -359,6 +381,12 @@ class Quoridor7:
             else:
                 walls_h = self._walls_grid_from_bits(int(state.get("walls_h", 0)))
                 walls_v = self._walls_grid_from_bits(int(state.get("walls_v", 0)))
+                wall_owner_h = self._owner_grid_from_bits(
+                    int(state.get("walls_h_p1", 0)), int(state.get("walls_h_p2", 0))
+                )
+                wall_owner_v = self._owner_grid_from_bits(
+                    int(state.get("walls_v_p1", 0)), int(state.get("walls_v_p2", 0))
+                )
         else:
             board = np.asarray(state, dtype=np.int8)
             walls_h = np.zeros((self.row_count + 1, self.column_count + 1), dtype=np.int8)
@@ -385,8 +413,11 @@ class Quoridor7:
             x1 = min(width, x + 1)
             visualized_state[:, :, x:x1] = grid_color
 
-        # walls from walls_h / walls_v (black thick line)
+        # walls from walls_h / walls_v (colored by wall owner when available)
         wall_thickness = max(2, size // 4)
+        wall_color_p1 = np.array([0.10, 0.30, 0.95], dtype=np.float32)
+        wall_color_p2 = np.array([0.92, 0.20, 0.15], dtype=np.float32)
+        wall_color_default = np.array([0.0, 0.0, 0.0], dtype=np.float32)
         for wr in range(walls_h.shape[0]):
             for wc in range(walls_h.shape[1]):
                 if walls_h[wr, wc] <= 0:
@@ -399,7 +430,13 @@ class Quoridor7:
                 xx0 = max(0, x0)
                 xx1 = min(width, x1 + 1)
                 if yy0 < yy1 and xx0 < xx1:
-                    visualized_state[:, yy0:yy1, xx0:xx1] = 0.0
+                    owner = int(wall_owner_h[wr, wc])
+                    if owner > 0:
+                        visualized_state[:, yy0:yy1, xx0:xx1] = wall_color_p1[:, None, None]
+                    elif owner < 0:
+                        visualized_state[:, yy0:yy1, xx0:xx1] = wall_color_p2[:, None, None]
+                    else:
+                        visualized_state[:, yy0:yy1, xx0:xx1] = wall_color_default[:, None, None]
 
         for wr in range(walls_v.shape[0]):
             for wc in range(walls_v.shape[1]):
@@ -413,7 +450,13 @@ class Quoridor7:
                 yy0 = max(0, y0)
                 yy1 = min(height, y1 + 1)
                 if yy0 < yy1 and xx0 < xx1:
-                    visualized_state[:, yy0:yy1, xx0:xx1] = 0.0
+                    owner = int(wall_owner_v[wr, wc])
+                    if owner > 0:
+                        visualized_state[:, yy0:yy1, xx0:xx1] = wall_color_p1[:, None, None]
+                    elif owner < 0:
+                        visualized_state[:, yy0:yy1, xx0:xx1] = wall_color_p2[:, None, None]
+                    else:
+                        visualized_state[:, yy0:yy1, xx0:xx1] = wall_color_default[:, None, None]
 
         # pawns
         radius = max(2, size // 3)
@@ -474,6 +517,10 @@ class Quoridor7:
             "p_bits": [self._bit(self.size // 2), self._bit(self.size * (self.size - 1) + self.size // 2)],
             "walls_h": self._edge_walls_h,
             "walls_v": self._edge_walls_v,
+            "walls_h_p1": 0,
+            "walls_h_p2": 0,
+            "walls_v_p1": 0,
+            "walls_v_p2": 0,
             "h_block": 0,
             "v_block": 0,
             "walls_left": np.array([self.initial_walls_left, self.initial_walls_left], dtype=np.int8),
@@ -520,13 +567,23 @@ class Quoridor7:
         elif action_idx < 4 + self.inner_wall_cnt:
             compact_idx = action_idx - 4
             wall_idx = self._compact_to_wall_idx(compact_idx)
-            next_state["walls_h"] |= self._bit(wall_idx)
+            wall_bit = self._bit(wall_idx)
+            next_state["walls_h"] |= wall_bit
+            if turn == 0:
+                next_state["walls_h_p1"] |= wall_bit
+            else:
+                next_state["walls_h_p2"] |= wall_bit
             next_state["h_block"] |= self._h_expand_lut[wall_idx]
             next_state["walls_left"][turn] -= 1
         else:
             compact_idx = action_idx - (4 + self.inner_wall_cnt)
             wall_idx = self._compact_to_wall_idx(compact_idx)
-            next_state["walls_v"] |= self._bit(wall_idx)
+            wall_bit = self._bit(wall_idx)
+            next_state["walls_v"] |= wall_bit
+            if turn == 0:
+                next_state["walls_v_p1"] |= wall_bit
+            else:
+                next_state["walls_v_p2"] |= wall_bit
             next_state["v_block"] |= self._v_expand_lut[wall_idx]
             next_state["walls_left"][turn] -= 1
 
@@ -660,6 +717,10 @@ class Quoridor7:
             ],
             "walls_h": self._flip_bits(int(state["walls_h"]), self.wall_cnt),
             "walls_v": self._flip_bits(int(state["walls_v"]), self.wall_cnt),
+            "walls_h_p1": self._flip_bits(int(state.get("walls_h_p2", 0)), self.wall_cnt),
+            "walls_h_p2": self._flip_bits(int(state.get("walls_h_p1", 0)), self.wall_cnt),
+            "walls_v_p1": self._flip_bits(int(state.get("walls_v_p2", 0)), self.wall_cnt),
+            "walls_v_p2": self._flip_bits(int(state.get("walls_v_p1", 0)), self.wall_cnt),
             "h_block": 0,
             "v_block": 0,
             "walls_left": np.array([state["walls_left"][1], state["walls_left"][0]], dtype=np.int8),
