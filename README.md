@@ -116,6 +116,17 @@ python Main.py play --game othello --version 0
 model_play(game, version)
 ```
 
+```bash
+# 사람 vs AI
+python Main.py play --config quoridor5 --version 60 --human-player 1
+
+# AI vs AI (서로 다른 모델)
+python Main.py play --config quoridor5 --version 30 --versus-version 60
+
+# AI vs AI (동일 모델 셀프 대전)
+python Main.py play --config quoridor5 --version 60 --versus-version 60
+```
+
 ---
 
 ### 1.4 전체 명령어 요약
@@ -125,5 +136,3 @@ python Main.py test   --game <game_name>
 python Main.py learn  --game <game_name> --config <config_name>
 python Main.py play   --game <game_name> --version <model_version>
 ```
-
----

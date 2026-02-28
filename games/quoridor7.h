@@ -79,6 +79,41 @@ inline bool check_win(const State& state, int action, int8_t player) {
   return check_win_by_index(state, p_idx);
 }
 
+inline int rotate_inner_wall_compact_180(int idx) {
+  if (idx < 0 || idx >= INNER_WALL_CNT) {
+    return idx;
+  }
+  const int n = INNER_WALL;
+  const int r = idx / n;
+  const int c = idx % n;
+  return (n - 1 - r) * n + (n - 1 - c);
+}
+
+inline int action_from_canonical(int action, int8_t player) {
+  if (player != -1) {
+    return action;
+  }
+  if (action < 0 || action >= ACTION_SIZE) {
+    return action;
+  }
+  if (action == ACTION_PASS) {
+    return action;
+  }
+  if (action < 4) {
+    static constexpr int kDirMap[4] = {1, 0, 3, 2};
+    return kDirMap[action];
+  }
+  if (action < 4 + INNER_WALL_CNT) {
+    const int compact = action - 4;
+    return 4 + rotate_inner_wall_compact_180(compact);
+  }
+  if (action < 4 + 2 * INNER_WALL_CNT) {
+    const int compact = action - (4 + INNER_WALL_CNT);
+    return 4 + INNER_WALL_CNT + rotate_inner_wall_compact_180(compact);
+  }
+  return action;
+}
+
 inline bool bit_test(bitboard bits, int idx) {
   return ((bits >> idx) & static_cast<bitboard>(1)) != 0;
 }

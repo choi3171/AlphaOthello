@@ -35,5 +35,9 @@ inline int final_state_size() { return kBoardSize * kBoardSize; }
 inline void serialize_final_state(const Board& board, std::vector<int8_t>& out_final) {
   to_board_plane(board, out_final);
 }
+inline int action_from_canonical(int action, int8_t player) {
+  (void)player;
+  return action;
+}
 
 }  // namespace gomoku
